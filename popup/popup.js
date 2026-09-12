@@ -19,6 +19,22 @@ document.addEventListener('DOMContentLoaded', function() {
   var BTN_LABEL_DEFAULT = 'Analyze This Page';
   var LOADING_TEXT = 'Analyzing Amazon products...';
 
+  // --- Load More Products state ---
+  // allProducts holds the RAW (unranked) union of products gathered so far
+  // across the initial scrape and every load-more operation. The full pipeline
+  // (dedup -> validate -> budget -> sponsored -> sort) is re-run on this entire
+  // set every time, guaranteeing ONE global ranking.
+  var allProducts = [];
+  var currentBudget = { min: null, max: null };
+  var loadMoreCount = 0;
+  var isLoadingMore = false;
+  var lastRanked = [];
+  var MAX_LOADS = 5; // hard cap to prevent infinite loading
+
+  var loadMoreBtn = document.getElementById('loadMoreBtn');
+  var loadMoreSection = document.getElementById('loadMoreSection');
+  var loadMoreMessage = document.getElementById('loadMoreMessage');
+
   function setLoading(loading) {
     isAnalyzing = loading;
     analyzeBtn.disabled = loading;
@@ -48,7 +64,11 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    analyze(function(err, products) {
+    // Reset load-more state for a fresh analysis
+    loadMoreCount = 0;
+    allProducts = [];
+
+    analyze(function(err, products, moreAvailable) {
       setLoading(false);
 
       if (err) {
@@ -61,35 +81,56 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // Step 1: Remove duplicate products (by ASIN → canonical URL)
-      var unique = deduplicateProducts(products);
+      // Run the SAME pipeline (dedup -> validate -> budget -> sponsored -> sort).
+      // processProducts shows the appropriate empty-state error on its own.
+      var ranked = processProducts(products, budget, true);
+      if (!ranked) return;
 
-      if (unique.length === 0) {
-        showError(UI.MESSAGES.noProducts, UI.MESSAGES.noProductsHint);
-        return;
-      }
+      // Persist the RAW union of products + budget so load-more can re-run the
+      // identical pipeline on the merged set (guaranteeing ONE global ranking).
+      allProducts = products.slice();
+      currentBudget = budget;
+      lastRanked = ranked;
 
-      // Step 2: Filter by price range
-      var filtered = filterByPriceRange(unique, budget.min, budget.max);
-
-      if (filtered.length === 0) {
-        showError(UI.MESSAGES.budgetNoMatch, UI.MESSAGES.budgetNoMatchHint);
-        return;
-      }
-
-      // Step 3: Exclude sponsored products from the ranking
-      var organic = excludeSponsoredProducts(filtered);
-
-      if (organic.length === 0) {
-        showError(UI.MESSAGES.allSponsored, UI.MESSAGES.allSponsoredHint);
-        return;
-      }
-
-      // Step 4: Sort by review count descending (unchanged)
-      var ranked = sortByReviewCount(organic);
-
-      // Step 5: Render
       showResults(ranked, budget.min, budget.max);
+      updateLoadMoreSection(!!moreAvailable);
+    });
+  });
+
+  loadMoreBtn.addEventListener('click', function() {
+    // Double-click guard: ignore while a load is in flight or limit reached.
+    if (isLoadingMore) return;
+    if (loadMoreCount >= MAX_LOADS) return;
+
+    setLoadMoreLoading(true);
+    loadMoreProducts(function(response) {
+      setLoadMoreLoading(false);
+
+      if (!response || !response.success) {
+        showLoadMoreMessage("Couldn't load more products. Try again.");
+        if (loadMoreBtn) loadMoreBtn.style.display = 'inline-flex'; // allow retry
+        return;
+      }
+
+      // Merge newly-loaded products into the raw set, then re-run the SAME
+      // pipeline (dedup -> validate -> budget -> sponsored -> sort) on the
+      // combined set so every product participates in ONE global ranking.
+      var newProducts = (response.products || []).slice();
+      if (newProducts.length > 0) {
+        allProducts = allProducts.concat(newProducts);
+        loadMoreCount++;
+      }
+
+      var ranked = processProducts(allProducts, currentBudget, false);
+      if (ranked && ranked.length > 0) {
+        lastRanked = ranked;
+        showResults(ranked, currentBudget.min, currentBudget.max);
+      } else if (lastRanked && lastRanked.length > 0) {
+        // Defensive: never wipe already-displayed results if a re-run is empty.
+        showResults(lastRanked, currentBudget.min, currentBudget.max);
+      }
+
+            finishLoadMore(response);
     });
   });
 
@@ -157,7 +198,12 @@ document.addEventListener('DOMContentLoaded', function() {
   function sortByReviewCount(products) {
     var copy = products.slice();
     copy.sort(function(a, b) {
-      return (b.reviewCount || 0) - (a.reviewCount || 0);
+      // Review-count DESC. A null reviewCount is treated as "-1" so a
+      // product with a null count can NEVER outrank any valid count
+      // (including 0) and always lands at the bottom of the ranking.
+      var aCount = (typeof a.reviewCount === 'number' && isFinite(a.reviewCount)) ? a.reviewCount : -1;
+      var bCount = (typeof b.reviewCount === 'number' && isFinite(b.reviewCount)) ? b.reviewCount : -1;
+      return bCount - aCount;
     });
     return copy;
   }
@@ -236,61 +282,116 @@ document.addEventListener('DOMContentLoaded', function() {
     return score;
   }
 
-  function analyze(callback) {
+    // Send a message to the content script of the active tab. When urlCheck is
+  // true the active tab must be an Amazon search-results page (initial analyze).
+  // When false we skip that check — load-more already validated the context.
+  function sendTabMessage(action, urlCheck, callback) {
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
       if (!tabs || !tabs[0]) {
-        callback('Cannot access the current tab. Please try again.');
+        callback({ success: false, error: 'Cannot access the current tab. Please try again.' });
         return;
       }
 
       var tab = tabs[0];
       var url = tab.url || '';
 
-      if (url.indexOf('amazon.') === -1) {
-        callback('Open an Amazon search-results page first.');
-        return;
+      if (urlCheck) {
+        if (url.indexOf('amazon.') === -1) {
+          callback({ success: false, error: 'Open an Amazon search-results page first.' });
+          return;
+        }
+        var isSearchPage = url.indexOf('/s?') !== -1 || url.indexOf('/s/') !== -1 || url.indexOf('k=') !== -1;
+        if (!isSearchPage) {
+          callback({ success: false, error: 'Navigate to an Amazon search results page first.' });
+          return;
+        }
       }
 
-      var isSearchPage = url.indexOf('/s?') !== -1 || url.indexOf('/s/') !== -1 || url.indexOf('k=') !== -1;
-      if (!isSearchPage) {
-        callback('Navigate to an Amazon search results page first.');
-        return;
-      }
-
-      chrome.tabs.sendMessage(tab.id, { action: 'scrapeAmazon' }, function(response) {
+      chrome.tabs.sendMessage(tab.id, { action: action }, function(response) {
         if (chrome.runtime.lastError) {
+          // Content script may not be injected yet — inject once and retry.
           chrome.scripting.executeScript({
             target: { tabId: tab.id },
             files: ['content/content.js']
           }, function() {
             if (chrome.runtime.lastError) {
-              callback('Could not analyze this page. Please refresh the Amazon page and try again.');
+              callback({ success: false, error: 'Could not analyze this page. Please refresh the Amazon page and try again.' });
               return;
             }
             setTimeout(function() {
-              chrome.tabs.sendMessage(tab.id, { action: 'scrapeAmazon' }, function(response2) {
+              chrome.tabs.sendMessage(tab.id, { action: action }, function(r2) {
                 if (chrome.runtime.lastError) {
-                  callback('Could not analyze this page. Please refresh and try again.');
-                  return;
+                  callback({ success: false, error: 'Could not analyze this page. Please refresh and try again.' });
+                } else {
+                  callback(r2 || { success: false, error: 'Could not analyze this page. Please refresh the Amazon page and try again.' });
                 }
-                handleResponse(response2, callback);
               });
             }, 500);
           });
           return;
         }
-        handleResponse(response, callback);
+        callback(response || { success: false, error: 'Could not analyze this page. Please refresh the Amazon page and try again.' });
       });
     });
   }
 
-  function handleResponse(response, callback) {
-    if (!response || !response.success) {
-      callback(response ? response.error : 'Could not analyze this page. Please refresh the Amazon page and try again.');
-      return;
-    }
-    callback(null, response.products || []);
+  // Initial scrape: callback(err, products, moreAvailable)
+  function analyze(callback) {
+    sendTabMessage('scrapeAmazon', true, function(response) {
+      if (!response || !response.success) {
+        callback(response ? response.error : 'Could not analyze this page. Please refresh the Amazon page and try again.');
+        return;
+      }
+      callback(null, response.products || [], !!response.moreAvailable);
+    });
   }
+
+  // Load-more: callback receives the raw content-script response object.
+  function loadMoreProducts(callback) {
+    sendTabMessage('loadMoreAmazon', false, callback);
+  }
+
+  // The SINGLE source of truth for the ranking pipeline — used for BOTH the
+  // initial analysis and every load-more re-run, so there is never a second
+  // ranking algorithm:
+  //   dedup -> validate -> budget filter -> sponsored exclusion -> sort DESC
+  // When showErrors is true, empty stages surface their user-facing error;
+  // when false (load-more re-runs) they stay silent and return null.
+  function processProducts(products, budget, showErrors) {
+    var V = window.ReviewRankValidation;
+    var unique = deduplicateProducts(products);
+
+    if (!unique || unique.length === 0) {
+      if (showErrors) showError(UI.MESSAGES.noProducts, UI.MESSAGES.noProductsHint);
+      return null;
+    }
+
+    var valid = V.validateProducts(unique);
+
+    if (!valid || valid.length === 0) {
+      if (showErrors) showError(UI.MESSAGES.noProducts, UI.MESSAGES.noProductsHint);
+      return null;
+    }
+
+    var filtered = filterByPriceRange(valid, budget.min, budget.max);
+
+    if (!filtered || filtered.length === 0) {
+      if (showErrors) showError(UI.MESSAGES.budgetNoMatch, UI.MESSAGES.budgetNoMatchHint);
+      return null;
+    }
+
+    var organic = excludeSponsoredProducts(filtered);
+
+    if (!organic || organic.length === 0) {
+      if (showErrors) showError(UI.MESSAGES.allSponsored, UI.MESSAGES.allSponsoredHint);
+      return null;
+    }
+
+    // Sort by review count descending (null-count always sorts below any valid
+    // count, including 0). Ranks are assigned contiguously on render.
+    return sortByReviewCount(organic);
+  }
+
 
   function showError(message, hint) {
     initialState.style.display = 'none';
@@ -330,6 +431,74 @@ document.addEventListener('DOMContentLoaded', function() {
       if (cardEl) {
         productsList.appendChild(cardEl);
       }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Load More Products — UI state + wiring
+  // ------------------------------------------------------------------
+
+  function setLoadMoreLoading(loading) {
+    isLoadingMore = loading; // synchronous so a 2nd click is rejected immediately
+    if (loadMoreBtn) {
+      loadMoreBtn.disabled = loading;
+      loadMoreBtn.setAttribute('aria-busy', loading ? 'true' : 'false');
+      loadMoreBtn.textContent = loading ? 'Loading more products...' : 'Load More Products';
+    }
+    if (loading) {
+      showLoadMoreMessage('Loading more products...');
+    }
+  }
+
+  function showLoadMoreMessage(msg) {
+    if (!loadMoreMessage) return;
+    loadMoreMessage.textContent = msg || '';
+    loadMoreMessage.style.display = msg ? 'block' : 'none';
+  }
+
+  function hideLoadMoreButton() {
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+  }
+
+  function showLoadMoreButton(label) {
+    if (!loadMoreSection) return;
+    loadMoreSection.style.display = 'block';
+    if (loadMoreBtn) {
+      loadMoreBtn.style.display = 'inline-flex';
+      loadMoreBtn.textContent = label || 'Load More Products';
+    }
+    showLoadMoreMessage('');
+  }
+
+  // After the initial analyze: show the Load More button or the "analyzed" note.
+  function updateLoadMoreSection(moreAvailable) {
+    if (!loadMoreSection) return;
+    loadMoreSection.style.display = 'block';
+    if (moreAvailable && loadMoreCount < MAX_LOADS) {
+      showLoadMoreButton('Load More Products');
+    } else {
+      hideLoadMoreButton();
+      showLoadMoreMessage('All available products analyzed');
+    }
+  }
+
+  // After a load-more operation completes.
+  function finishLoadMore(response) {
+    var newCount = (response && response.newCount) || 0;
+    var moreAvailable = !!(response && response.moreAvailable);
+
+    if (newCount === 0) {
+      hideLoadMoreButton();
+      showLoadMoreMessage('No additional products found');
+      return;
+    }
+
+    if (moreAvailable && loadMoreCount < MAX_LOADS) {
+      showLoadMoreButton('Load More Products');
+    } else {
+      // Reached the load cap (MAX_LOADS) OR Amazon no longer exposes a trigger.
+      hideLoadMoreButton();
+      showLoadMoreMessage('All available products analyzed');
     }
   }
 });

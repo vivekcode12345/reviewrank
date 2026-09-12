@@ -4,15 +4,26 @@
 (function() {
   'use strict';
 
-  // Listen for messages from the popup (guarded for non-browser test environments)
+    // Listen for messages from the popup (guarded for non-browser test environments)
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === 'scrapeAmazon') {
         try {
           const products = extractAmazonProducts();
-          sendResponse({ success: true, products });
+          sendResponse({ success: true, products: products, moreAvailable: !!findLoadMoreTrigger() });
         } catch (err) {
           console.error('ReviewRank scrape error:', err);
+          sendResponse({ success: false, error: err.message });
+        }
+        return true;
+      }
+      if (message.action === 'loadMoreAmazon') {
+        try {
+          loadMoreAndExtractAsync(function (response) {
+            sendResponse(response);
+          });
+        } catch (err) {
+          console.error('ReviewRank load-more error:', err);
           sendResponse({ success: false, error: err.message });
         }
         return true;
@@ -112,7 +123,7 @@
     return {
       title,
       price: extractPrice(item),
-      rating: extractRating(item) || 0,
+      rating: extractRating(item), // null when missing — never a fake 0-star
       reviewCount: extractReviewCount(item),
       imageUrl: extractImageUrl(item),
       url: productUrl || canonicalUrl,
@@ -468,6 +479,238 @@
     return false;
   }
 
+      // ------------------------------------------------------------------
+  // Load More / Additional Products Detection
+  // ------------------------------------------------------------------
+  //
+  // Amazon sometimes exposes additional search results through a "Load more"
+  // mechanism — a click-triggered button that appends more result cards to the
+  // live DOM. This lets ReviewRank analyze MORE of the CURRENT page's results
+  // WITHOUT navigating, paginating, or calling any API/backend.
+  //
+  // Detection is intentionally multi-strategy (never one fragile selector):
+  //   1. data-attributes on load-more controls ([data-action="load-more"], ...)
+  //   2. id/class fragments (#pabk-button, .load-more-button, .see-more, ...)
+  //   3. accessible text ("Load more", "See more results", ...)
+  //
+  // If no mechanism is present we simply analyze what is already on the page.
+
+  var LOAD_MORE_TEXT = /load\s*more|see\s*more\s*(results|products)?|more\s*products/i;
+  var LOAD_MORE_ATTRS = ['load-more', 'loadmore', 'load_more'];
+  var LOAD_MORE_ROLES = ['loadmore', 'see-more', 'see-more-results'];
+
+  // Stable identity for a product — used to isolate newly-loaded products from
+  // ones already extracted (ASIN is the source of truth, fallback to URL).
+  function productKey(product) {
+    if (!product || typeof product !== 'object') return '';
+    if (product.asin) return 'asin:' + product.asin;
+    if (product.canonicalUrl) return 'url:' + product.canonicalUrl;
+    if (product.url) return 'url:' + product.url;
+    return 'untitled:' + (typeof product.title === 'string' ? product.title : '');
+  }
+
+  function elementText(el) {
+    if (!el) return '';
+    try {
+      var t = (el.textContent || '').trim().replace(/\s+/g, ' ');
+      var al = el.getAttribute ? el.getAttribute('aria-label') || '' : '';
+      var tt = el.getAttribute ? el.getAttribute('title') || '' : '';
+      if (!t && al) t = al.trim().replace(/\s+/g, ' ');
+      if (!t && tt) t = tt.trim().replace(/\s+/g, ' ');
+      return t;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function isHidden(el) {
+    if (!el) return true;
+    if (el.disabled === true) return true;
+    if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return true;
+    if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return true;
+    // offsetParent === null means display:none or zero size
+    if (typeof el.offsetParent !== 'undefined' && el.offsetParent === null) {
+      return true;
+    }
+    return false;
+  }
+    // Returns the clickable "Load more" element (button/link) or null.
+  // Multi-strategy: data-attributes → id/class fragments → accessible text.
+  function findLoadMoreTrigger(root) {
+    var container = root || (typeof document !== 'undefined' ? document.body : null);
+    if (!container || !container.querySelectorAll) return null;
+
+    // Strategy A: data-attributes / data-action conventions (most reliable)
+    var attrSel = [
+      '[data-action="load-more"]',
+      '[data-action="loadmore"]',
+      '[data-load-more="true"]',
+      '[data-loadmore="true"]',
+      '[data-testid*="load-more"]',
+      '[data-testid*="loadmore"]'
+    ];
+    for (var a = 0; a < attrSel.length; a++) {
+      var attrMatches = container.querySelectorAll(attrSel[a]);
+      for (var ai = 0; ai < attrMatches.length; ai++) {
+        if (!isHidden(attrMatches[ai]) && isLoadMoreElement(attrMatches[ai])) {
+          return attrMatches[ai];
+        }
+      }
+    }
+
+    // Strategy B: id / class fragments (Amazon uses #pabk-button etc.)
+    var idClassSel = [
+      '#pabk-button-container button',
+      '#pabk-button',
+      '.pabk-button',
+      '.load-more-button',
+      '.loadmore',
+      '.see-more',
+      '.see-more-results'
+    ];
+    for (var ic = 0; ic < idClassSel.length; ic++) {
+      var icMatches = container.querySelectorAll(idClassSel[ic]);
+      if (icMatches.length > 0 && !isHidden(icMatches[0])) return icMatches[0];
+    }
+
+    // Strategy C: any button / link / role=button whose accessible text
+    // looks like a load-more action. Text is the most stable signal across
+    // Amazon's DOM changes, so it is the primary fallback.
+    var clickables = container.querySelectorAll('button, [role="button"], a');
+    var best = null;
+    for (var ci = 0; ci < clickables.length; ci++) {
+      var c = clickables[ci];
+      if (isHidden(c)) continue;
+      var t = elementText(c);
+      if (!t) continue;
+      if (LOAD_MORE_TEXT.test(t)) {
+        if (isLoadMoreElement(c)) return c;   // strong signal — return immediately
+        if (!best) best = c;                  // weak text-only match — keep looking
+      }
+    }
+    return best;
+
+    // Inner helper: does this element carry a load-more-ish attribute or
+    // id/class token? (prevents matching generic "See more" nav links.)
+    function isLoadMoreElement(el) {
+      var id = el.getAttribute ? (el.getAttribute('id') || '') : '';
+      var cls = el.getAttribute ? (el.getAttribute('class') || '') : '';
+      var data = el.getAttribute
+        ? (el.getAttribute('data-action') || el.getAttribute('data-testid') || '')
+        : '';
+      if (data && LOAD_MORE_ATTRS.some(function (a) { return data.toLowerCase().indexOf(a) !== -1; })) {
+        return true;
+      }
+      if (id && LOAD_MORE_ROLES.some(function (r) { return id.toLowerCase().indexOf(r) !== -1; })) {
+        return true;
+      }
+      if (cls && LOAD_MORE_ROLES.some(function (r) { return cls.toLowerCase().indexOf(r) !== -1; })) {
+        return true;
+      }
+      return false;
+    }
+  }
+    // Loads additional results from Amazon's load-more mechanism and returns only
+  // the newly-added products. Guarantees:
+  //   - never navigates / never calls an API / never fetches Amazon HTML
+  //   - bounded wait: settles after 500ms of stability or hard timeout at 2.5s
+  //   - MutationObserver is always disconnected (no permanent observers)
+  //   - returns { success, products:[new], moreAvailable, newCount, totalProducts }
+  function loadMoreAndExtractAsync(callback) {
+    var trigger = findLoadMoreTrigger();
+    if (!trigger) {
+      callback({ success: true, products: [], moreAvailable: false, newCount: 0 });
+      return;
+    }
+
+    // Snapshot currently-extracted products so we can isolate the NEW ones.
+    var before = extractAmazonProducts();
+    var beforeCount = before.length;
+    var seenKeys = {};
+    for (var i = 0; i < before.length; i++) {
+      seenKeys[productKey(before[i])] = true;
+    }
+
+    // Trigger the load via a real, cancelable click. Amazon binds its handlers
+    // via addEventListener, so dispatchEvent fires them. (Synthetic clicks are
+    // not user-trusted; if Amazon gates on isTrusted we fall back gracefully —
+    // see documentation/known limitations.)
+    try {
+      var ev = (typeof MouseEvent !== 'undefined')
+        ? new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
+        : null;
+      if (ev) {
+        trigger.dispatchEvent(ev);
+      } else {
+        trigger.click();
+      }
+    } catch (e) {
+      try { trigger.click(); } catch (e2) { /* best effort */ }
+    }
+
+    var SETTLE_MS = 500;   // stability window after the last new card appears
+    var TIMEOUT_MS = 2500; // hard upper bound — never wait longer than this
+    var done = false;
+    var timeoutId = null;
+    var settleTimer = null;
+    var observer = null;
+
+    function cleanup() {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (settleTimer) clearTimeout(settleTimer);
+      if (observer) try { observer.disconnect(); } catch (e) { /* noop */ }
+    }
+
+    function finish() {
+      if (done) return;
+      done = true;
+      cleanup();
+
+      var after = extractAmazonProducts();
+      var newProducts = [];
+      var keys = {};
+      var k;
+      for (k in seenKeys) { keys[k] = seenKeys[k]; }
+      for (var j = 0; j < after.length; j++) {
+        var key = productKey(after[j]);
+        if (!keys[key]) {
+          keys[key] = true;
+          newProducts.push(after[j]);
+        }
+      }
+
+      // Has Amazon finished loading? The trigger typically disappears or is
+      // hidden when there are no more results to load.
+      var moreAvailable = !!findLoadMoreTrigger();
+
+      callback({
+        success: true,
+        products: newProducts,
+        moreAvailable: moreAvailable,
+        newCount: newProducts.length,
+        totalProducts: after.length
+      });
+    }
+
+    // Hard upper bound — never wait longer than this.
+    timeoutId = setTimeout(finish, TIMEOUT_MS);
+
+    // Efficiency: re-extract only when the result-card count changes, then wait
+    // for a short stability window before collecting.
+    try {
+      observer = new MutationObserver(function () {
+        if (done) return;
+        var curCount = document.querySelectorAll('[data-component-type="s-search-result"]').length;
+        if (curCount > beforeCount) {
+          if (settleTimer) clearTimeout(settleTimer);
+          settleTimer = setTimeout(finish, SETTLE_MS);
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    } catch (e) {
+      // MutationObserver unavailable — rely on the hard timeout only.
+    }
+  }
   // Expose internals for unit testing (no-op inside the browser extension)
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
@@ -485,7 +728,9 @@
       parseReviewCountText: parseReviewCountText,
       isPlausibleReviewCount: isPlausibleReviewCount,
       normalizeAmazonUrl: normalizeAmazonUrl,
-      extractAsinFromUrl: extractAsinFromUrl
+      extractAsinFromUrl: extractAsinFromUrl,
+      findLoadMoreTrigger: findLoadMoreTrigger,
+      productKey: productKey
     };
   }
 })();

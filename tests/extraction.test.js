@@ -404,7 +404,7 @@ var bareCard = el('div', { 'data-asin': 'B0ZZZZZZZZ' }, [
 ]);
 var bareParsed = X.parseAmazonProduct(bareCard);
 eq(bareParsed.price, null, 'missing: price is null (not invented)');
-eq(bareParsed.rating, 0, 'missing: rating is 0 (popup-neutral missing value)');
+eq(bareParsed.rating, null, 'missing: rating is null (missing is distinct from a real 0-star)');
 eq(bareParsed.reviewCount, null, 'missing: reviewCount is null (not invented)');
 
 // ranking behavior: product without reviewCount sorts LAST (via popup logic)

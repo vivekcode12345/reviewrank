@@ -56,7 +56,15 @@
           <span class="results-sub" id="resultsSub"></span>
           <p class="results-note" id="resultsNote"></p>
         </div>
-        <div id="productsList" class="products-list"></div>
+                <div id="productsList" class="products-list"></div>
+
+        <!-- Load More Products: separate from "Analyze This Page" -->
+        <div id="loadMoreSection" class="load-more-section" style="display:none;">
+          <button id="loadMoreBtn" class="load-more-btn" aria-busy="false">
+            <span class="btn-label">Load More Products</span>
+          </button>
+          <p id="loadMoreMessage" class="load-more-message" role="status" aria-live="polite"></p>
+        </div>
       </div>
     </main>
 
@@ -66,6 +74,7 @@
   </div>
 
   <script src="../lib/display.js"></script>
+  <script src="../lib/product-validation.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
