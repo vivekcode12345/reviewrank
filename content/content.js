@@ -10,7 +10,17 @@
       if (message.action === 'scrapeAmazon') {
         try {
           const products = extractAmazonProducts();
-          sendResponse({ success: true, products: products, moreAvailable: !!findLoadMoreTrigger() });
+          var pageHref = '';
+          try {
+            pageHref = (typeof location !== 'undefined' && location.href) ? location.href : '';
+          } catch (e) { pageHref = ''; }
+          sendResponse({ 
+            success: true, 
+            products: products, 
+            moreAvailable: !!findLoadMoreTrigger(),
+            nextPageUrl: findNextPageLink(),
+            pageUrl: pageHref
+          });
         } catch (err) {
           console.error('ReviewRank scrape error:', err);
           sendResponse({ success: false, error: err.message });
@@ -499,6 +509,12 @@
   var LOAD_MORE_ATTRS = ['load-more', 'loadmore', 'load_more'];
   var LOAD_MORE_ROLES = ['loadmore', 'see-more', 'see-more-results'];
 
+  // Email/password/SMS FORD HTML element (Broxton Chrome inlined inside the
+  // system modal / chrome://system frame). Chrome 115+ inlines Broxton into
+  // system view pages; ignore these non-product elements.
+  var FORD_CLASSES = ['ApHcvd', 'NmiuEb', 'm0dNvb', 'XKjMKe', 'NqJPjb', 'yhUmnc', 'i18n', 'fcit'];
+  var FORD_TEXT_FRAGMENTS = ['enter your email', 'enter a password', 'enter your phone', 'verification code', 'confirm your email', 'confirm your password', 'create password'];
+
   // Stable identity for a product — used to isolate newly-loaded products from
   // ones already extracted (ASIN is the source of truth, fallback to URL).
   function productKey(product) {
@@ -711,6 +727,273 @@
       // MutationObserver unavailable — rely on the hard timeout only.
     }
   }
+  // ------------------------------------------------------------------
+  // Pagination / Next-Page Detection (Feature #7)
+  // ------------------------------------------------------------------
+  //
+  // Amazon search-result pages expose a "Next" control that navigates to the
+  // following results page (real browser navigation driven by the background
+  // service worker through a REAL page load — ReviewRank NEVER fetch() /
+  // DOMParser-scrapes Amazon HTML).
+  //
+  // Detection is intentionally multi-strategy (never one fragile selector):
+  //   1. aria-label indicating next ("Go to next page", "Next", ...) — Amazon
+  //      tags the pending-page link this way regardless of layout skin.
+  //   2. known Amazon pagination semantics: pagination containers
+  //      (.s-pagination-container, [role="navigation"], .a-pagination, nav)
+  //      plus .s-pagination-next tokens.
+  //   3. accessible "Next" text on links inside a pagination region
+  //      (fallback — never relies on text alone OUTSIDE pagination).
+  //
+  // Only links whose href actually represents another Amazon SEARCH-RESULTS
+  // page are returned. Product, review, wishlist/cart, javascript: and
+  // empty/# links are rejected. Search context is preserved because only the
+  // genuine Next pagination link is ever followed.
+  function isNextPageHref(href) {
+    if (typeof href !== 'string') return false;
+    var trimmed = href.trim();
+    if (!trimmed || trimmed === '#') return false;
+    var lower = trimmed.toLowerCase();
+    if (lower.indexOf('javascript:') === 0) return false;
+    if (lower.indexOf('mailto:') === 0 || lower.indexOf('tel:') === 0) return false;
+    // Reject product links: /dp/, /gp/product/, /gp/aw/, /exec/obidos/
+    if (/\/dp\/|\/gp\/product\/|\/gp\/aw\/|\/exec\/obidos\//i.test(trimmed)) return false;
+    // Reject review links
+    if (/product-reviews|customer-reviews|\/review\//i.test(trimmed)) return false;
+    // Reject wishlist / cart / account / order links
+    if (/\/gp\/cart|\/gp\/huc|\/hz\/cart|\/gp\/css|\/wishlist|\/list\/|\/gp\/buy|\/ap\/signin|\/gp\/your-account|\/gp\/css\/order-history|\/gp\/registry/i.test(trimmed)) return false;
+    // Must look like another Amazon search-results page
+    var isSearchPath = /\/s[\/?]/.test(trimmed);
+    var hasSearchParam = /[?&#](k|rh|page|pg|bbn|i|rn|ref|__mk|dchild)=/i.test(trimmed);
+    var hasPageParam = /[?&#](page|pg)=\d+/i.test(trimmed);
+    if (!isSearchPath && !hasSearchParam) return false;
+    if (hasPageParam || isSearchPath || hasSearchParam) return true;
+    return false;
+  }
+
+  function elementHref(el) {
+    if (!el) return '';
+    try {
+      // Prefer getAttribute first for determinism (test shim has attributes
+      // only); fall back to the resolved .href property in real browsers.
+      if (el.getAttribute) {
+        var raw = el.getAttribute('href');
+        if (raw) return raw;
+      }
+      if (typeof el.href === 'string' && el.href) return el.href;
+    } catch (e) { /* best effort */ }
+    return '';
+  }
+
+  // Returns the absolute URL of the next Amazon search-results page, or null.
+  // Multi-strategy: aria-label semantics -> pagination-container tokens ->
+  // standalone .s-pagination-next token. Never relies on text alone outside
+  // a pagination region, and every candidate href must pass isNextPageHref.
+  function findNextPageLink(root) {
+    var container = root || (typeof document !== 'undefined' ? document.body : null);
+    if (!container) return null;
+    var qa = function (sel) {
+      try { return container.querySelectorAll ? container.querySelectorAll(sel) : []; }
+      catch (e) { return []; }
+    };
+
+    function linkOk(el) {
+      if (!el || isHidden(el)) return null;
+      if (el.disabled === true) return null;
+      if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return null;
+      var href = elementHref(el);
+      if (!isNextPageHref(href)) return null;
+      return resolveNextHref(href);
+    }
+
+    // Strategy A: aria-label indicating next (most reliable).
+    var ariaSels = [
+      'a[aria-label="Go to next page"]',
+      'a[aria-label="Next"]',
+      'a[aria-label="next"]',
+      'a[aria-label="Next page"]',
+      'a[aria-label="next page"]'
+    ];
+    for (var a = 0; a < ariaSels.length; a++) {
+      var ariaMatches = qa(ariaSels[a]);
+      for (var ai = 0; ai < ariaMatches.length; ai++) {
+        var hitA = linkOk(ariaMatches[ai]);
+        if (hitA) return hitA;
+      }
+    }
+
+    // Strategy B: known Amazon pagination semantics — scoped to pagination
+    // regions so stray "next" text elsewhere can never leak in.
+    var regions = qa('.s-pagination-container, [role="navigation"], .a-pagination, nav');
+    var collect = [];
+    var b, bi;
+    for (b = 0; b < regions.length; b++) {
+      var region = regions[b];
+      if (!region || !region.querySelectorAll) continue;
+      var inRegion;
+      try { inRegion = region.querySelectorAll('a, button'); }
+      catch (e) { inRegion = []; }
+      for (bi = 0; bi < inRegion.length; bi++) collect.push(inRegion[bi]);
+    }
+    var tokenSels = ['a.s-pagination-next', '.s-pagination-item.s-pagination-next'];
+    for (b = 0; b < tokenSels.length; b++) {
+      var tokMatches = qa(tokenSels[b]);
+      for (bi = 0; bi < tokMatches.length; bi++) collect.push(tokMatches[bi]);
+    }
+    for (b = 0; b < collect.length; b++) {
+      var elB = collect[b];
+      if (!elB || isHidden(elB)) continue;
+      if (elB.disabled === true) continue;
+      if (elB.getAttribute && elB.getAttribute('aria-disabled') === 'true') continue;
+      var tagB = ((elB.tagName || elB.tag || '') + '').toUpperCase();
+      var clsB = (elB.getAttribute ? (elB.getAttribute('class') || '') : '') + '';
+      var hrefB = elementHref(elB);
+      // Direct pagination-token link qualifies on href shape alone.
+      if (/s-pagination-next/.test(clsB) && tagB === 'A') {
+        if (isNextPageHref(hrefB)) return resolveNextHref(hrefB);
+        continue;
+      }
+      // Otherwise require the accessible "Next" text gate inside pagination.
+      var textB = elementText(elB);
+      if (!/^\s*next\s*$|→/i.test(textB) &&
+          textB.toLowerCase().indexOf('go to next page') === -1) continue;
+      if (tagB === 'A' && isNextPageHref(hrefB)) return resolveNextHref(hrefB);
+    }
+
+    return null;
+  }
+
+  function elementHref(el) {
+    if (!el) return '';
+    try {
+      var href = el.getAttribute ? el.getAttribute('href') : '';
+      if (!href && el.getAttribute) href = el.getAttribute('data-href') || '';
+      return (href || '').trim().replace(/\s+/g, '');
+    } catch (e) { return ''; }
+  }
+
+  // Resolve a possibly-relative pagination href against the current page.
+  function resolveNextHref(href) {
+    try {
+      if (typeof URL !== 'undefined' &&
+          typeof document !== 'undefined' && document.baseURI) {
+        return new URL(href, document.baseURI).toString();
+      }
+      if (typeof location !== 'undefined' && location.href &&
+          typeof URL !== 'undefined') {
+        return new URL(href, location.href).toString();
+      }
+    } catch (e) { /* fall through */ }
+    return href;
+  }
+
+  // Canonical page URL for loop protection: strips volatile tracking params
+  function canonicalPageUrl(url) {
+    if (typeof url !== 'string') return '';
+    var trimmed = url.trim();
+    if (!trimmed) return '';
+    try {
+      if (typeof URL === 'undefined') return trimmed.split('#')[0];
+      var base = (typeof document !== 'undefined' && document.baseURI)
+        ? document.baseURI
+        : ((typeof location !== 'undefined' && location.href) ? location.href : 'https://www.amazon.in/');
+      var u = new URL(trimmed, base);
+      return canonicalFromParts(u);
+    } catch (e) {
+      return trimmed.split('#')[0];
+    }
+  }
+
+  // Volatile Amazon tracking params stripped for loop protection. Names are
+  // matched case-insensitively; `ref`-family, `pd_*` noise, `psc`, `srs`,
+  // `spIA`, `qid`, `sr`, session ids and slot ids never identify a page.
+  function isVolatilePageParam(name) {
+    var n = String(name || '').toLowerCase();
+    if (!n) return false;
+    // Amazon tracking / session noise (also matches ref_*, pd_rd_*, pf_rd_*,
+    // pldn_*, srs/*, spIA/sp_ia, qid, sr, th, keywords, __mk, smid, dchild).
+    if (n === 'ref' || n === 'psc' || n === 'qid' || n === 'sr' ||
+        n === 'th' || n === 'keywords' || n === '__mk' || n === 'smid' ||
+        n === 'dchild' || n === 'srs' || n === 'spia' || n === 'sp_ia' ||
+        n === 'slot' || n === 'slotid') return true;
+    if (n.indexOf('pd_') === 0) return true;
+    if (n.indexOf('ref_') === 0) return true;
+    if (n.indexOf('pf_rd_') === 0) return true;
+    if (n.indexOf('pldn') === 0) return true;
+    // pf / pf_rd short forms
+    if (n === 'pf') return true;
+    return false;
+  }
+
+  function canonicalFromParts(u) {
+    var keep = [];
+    var seen = {};
+    u.searchParams.forEach(function (v, k) {
+      if (isVolatilePageParam(k)) return;
+      var pair = k + '=' + v;
+      if (seen[pair]) return;
+      seen[pair] = true;
+      keep.push(pair);
+    });
+    keep.sort();
+    var host = (u.hostname || '').toLowerCase();
+    var port = u.port || '';
+    if ((u.protocol === 'https:' && port === '443') ||
+        (u.protocol === 'http:' && port === '80')) port = '';
+    var path = u.pathname || '/';
+    if (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
+    return u.protocol + '//' + host + (port ? ':' + port : '') + path +
+      (keep.length ? '?' + keep.join('&') : '');
+  }
+
+  // Volatile Amazon tracking params stripped for loop protection. Names are
+  // matched case-insensitively; `ref`-family, `pd_*` noise, `psc`, `srs`,
+  // `spIA`, `qid`, `sr`, session ids and slot ids never identify a page.
+  function isVolatilePageParam(name) {
+    var n = String(name || '').toLowerCase();
+    if (!n) return false;
+    // Amazon tracking / session noise (also matches ref_*, pd_rd_*, pf_rd_*,
+    // pldn_*, srs/*, spIA/sp_ia, qid, sr, th, keywords, __mk, smid, dchild).
+    if (n === 'ref' || n === 'psc' || n === 'qid' || n === 'sr' ||
+        n === 'th' || n === 'keywords' || n === '__mk' || n === 'smid' ||
+        n === 'dchild' || n === 'srs' || n === 'spia' || n === 'sp_ia' ||
+        n === 'slot' || n === 'slotid') return true;
+    if (n.indexOf('pd_') === 0) return true;
+    if (n.indexOf('ref_') === 0) return true;
+    if (n.indexOf('pf_rd_') === 0) return true;
+    if (n.indexOf('pldn') === 0) return true;
+    // pf / pf_rd short forms
+    if (n === 'pf') return true;
+    return false;
+  }
+
+  function canonicalFromParts(u) {
+    var keep = [];
+    var seen = {};
+    var params = u.search ? u.search.slice(1).split('&') : [];
+    for (var i = 0; i < params.length; i++) {
+      var pair = params[i];
+      if (!pair) continue;
+      var eqIdx = pair.indexOf('=');
+      var rawName = eqIdx === -1 ? pair : pair.slice(0, eqIdx);
+      var name = '';
+      try { name = decodeURIComponent(rawName); } catch (e) { name = rawName; }
+      if (isVolatilePageParam(name)) continue;
+      if (seen[pair]) continue;
+      seen[pair] = true;
+      keep.push(pair);
+    }
+    var sorted = keep.slice().sort().join('&');
+    var host = (u.hostname || '').toLowerCase();
+    var port = u.port || '';
+    if ((u.protocol === 'https:' && port === '443') ||
+        (u.protocol === 'http:' && port === '80')) port = '';
+    var path = u.pathname || '/';
+    if (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
+    return u.protocol + '//' + host + (port ? ':' + port : '') + path +
+      (sorted ? '?' + sorted : '');
+  }
+
   // Expose internals for unit testing (no-op inside the browser extension)
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
@@ -730,6 +1013,9 @@
       normalizeAmazonUrl: normalizeAmazonUrl,
       extractAsinFromUrl: extractAsinFromUrl,
       findLoadMoreTrigger: findLoadMoreTrigger,
+      findNextPageLink: findNextPageLink,
+      isNextPageHref: isNextPageHref,
+      canonicalPageUrl: canonicalPageUrl,
       productKey: productKey
     };
   }

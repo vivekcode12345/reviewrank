@@ -65,6 +65,11 @@
           </button>
           <p id="loadMoreMessage" class="load-more-message" role="status" aria-live="polite"></p>
         </div>
+        <div id="paginationSection" class="pagination-section" style="display:none;">
+          <button id="paginationBtn" class="analyze-next-btn" aria-busy="false">Analyze Next Page</button>
+          <p id="paginationMsg" class="pagination-message" role="status" aria-live="polite"></p>
+        </div>
+
       </div>
     </main>
 
@@ -75,6 +80,8 @@
 
   <script src="../lib/display.js"></script>
   <script src="../lib/product-validation.js"></script>
+  <script src="../background/background.js"></script>
+  <script src="../content/content.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

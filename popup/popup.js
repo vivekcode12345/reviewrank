@@ -29,6 +29,17 @@ document.addEventListener('DOMContentLoaded', function() {
   var loadMoreCount = 0;
   var isLoadingMore = false;
   var lastRanked = [];
+  // --- Pagination (#7) state ---
+  // pagesAnalyzed counts analyzed search-result pages (starts at 1).
+  // visitedPages holds CANONICAL page URLs to prevent loops.
+  // nextPageUrl is the raw next-page URL from the content script.
+  var MAX_PAGES = 5; // hard cap to prevent infinite pagination
+  var pagesAnalyzed = 1;
+  var visitedPages = new Set();
+  var nextPageUrl = null;
+  var originPageUrl = null;
+  var isPaginating = false;
+
   var MAX_LOADS = 5; // hard cap to prevent infinite loading
 
   var loadMoreBtn = document.getElementById('loadMoreBtn');
@@ -64,11 +75,19 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    // Reset load-more state for a fresh analysis
+    // Reset load-more AND pagination state for a fresh analysis
     loadMoreCount = 0;
     allProducts = [];
+    pagesAnalyzed = 1;
+    visitedPages = new Set();
+    nextPageUrl = null;
+    originPageUrl = null;
+    isPaginating = false;
+    if (typeof updatePaginationSection === 'function') {
+      try { updatePaginationSection(false, true); } catch (e) {}
+    }
 
-    analyze(function(err, products, moreAvailable) {
+    analyze(function(err, products, moreAvailable, fullResponse) {
       setLoading(false);
 
       if (err) {
@@ -86,14 +105,23 @@ document.addEventListener('DOMContentLoaded', function() {
       var ranked = processProducts(products, budget, true);
       if (!ranked) return;
 
-      // Persist the RAW union of products + budget so load-more can re-run the
-      // identical pipeline on the merged set (guaranteeing ONE global ranking).
+      // Persist the RAW union of products + budget so load-more AND pagination
+      // can re-run the identical pipeline on the merged set (ONE global ranking).
       allProducts = products.slice();
       currentBudget = budget;
       lastRanked = ranked;
 
+      // Pagination state: record the analyzed page + next-page link.
+      pagesAnalyzed = 1;
+      nextPageUrl = (fullResponse && fullResponse.nextPageUrl) || null;
+      originPageUrl = (fullResponse && fullResponse.pageUrl) || null;
+      try {
+        if (originPageUrl) visitedPages.add(canonicalPageUrlLocal(originPageUrl));
+      } catch (e) {}
+
       showResults(ranked, budget.min, budget.max);
       updateLoadMoreSection(!!moreAvailable);
+      updatePaginationSection(!!nextPageUrl);
     });
   });
 
@@ -335,15 +363,31 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // Initial scrape: callback(err, products, moreAvailable)
+  // Initial scrape: callback(err, products, moreAvailable, fullResponse)
+  // fullResponse also carries nextPageUrl + pageUrl for pagination state.
   function analyze(callback) {
-    sendTabMessage('scrapeAmazon', true, function(response) {
-      if (!response || !response.success) {
-        callback(response ? response.error : 'Could not analyze this page. Please refresh the Amazon page and try again.');
-        return;
-      }
-      callback(null, response.products || [], !!response.moreAvailable);
+    getActiveTabUrl(function(tabUrl) {
+      sendTabMessage('scrapeAmazon', true, function(response) {
+        if (!response || !response.success) {
+          callback(response ? response.error : 'Could not analyze this page. Please refresh the Amazon page and try again.');
+          return;
+        }
+        if (response && !response.pageUrl && tabUrl) response.pageUrl = tabUrl;
+        callback(null, response.products || [], !!response.moreAvailable, response);
+      });
     });
+  }
+
+  // Current active-tab URL (used as the pagination origin / visited marker).
+  function getActiveTabUrl(callback) {
+    try {
+      if (!chrome.tabs || !chrome.tabs.query) { callback(null); return; }
+      chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+        try {
+          callback(tabs && tabs[0] ? (tabs[0].url || null) : null);
+        } catch (e) { callback(null); }
+      });
+    } catch (e) { callback(null); }
   }
 
   // Load-more: callback receives the raw content-script response object.
@@ -414,8 +458,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // Header: "8 PRODUCTS FOUND" or "8 PRODUCTS IN ₹600 – ₹1,500"
     resultsCount.textContent = UI.resultsHeaderText(products.length, minPrice, maxPrice);
 
-    // "RANKED BY CUSTOMER RATING COUNT"
-    resultsSub.textContent = UI.RESULTS_SUBTEXT;
+    // "RANKED BY CUSTOMER RATING COUNT" + analyzed-pages progress.
+    // Stays compact: "RANKED BY CUSTOMER RATING COUNT · 2 PAGES ANALYZED".
+    var sub = UI.RESULTS_SUBTEXT;
+    try {
+      if (pagesAnalyzed > 1) sub += ' · ' + pagesMessage(pagesAnalyzed);
+    } catch (e) {}
+    resultsSub.textContent = sub;
 
     // Explanation + subtle disclaimer near the results
     resultsNote.textContent = UI.RANKED_BY_NOTE + ' — ' + UI.POPULARITY_DISCLAIMER;
@@ -500,6 +549,223 @@ document.addEventListener('DOMContentLoaded', function() {
       hideLoadMoreButton();
       showLoadMoreMessage('All available products analyzed');
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Pagination — UI state + wiring
+  // ------------------------------------------------------------------
+
+  function updatePaginationSection(nextPageAvailable, reset) {
+    var paginationSection = document.getElementById('paginationSection');
+    var paginationBtn = document.getElementById('paginationBtn');
+    var paginationMsg = document.getElementById('paginationMsg');
+
+    if (!paginationSection) return;
+
+    if (reset) {
+      paginationSection.style.display = 'none';
+      if (paginationBtn) {
+        paginationBtn.style.display = 'none';
+        paginationBtn.disabled = false;
+        paginationBtn.textContent = 'Analyze Next Page';
+      }
+      if (paginationMsg) paginationMsg.textContent = '';
+      return;
+    }
+
+    paginationSection.style.display = 'block';
+    if (nextPageAvailable && pagesAnalyzed < MAX_PAGES) {
+      if (paginationBtn) {
+        paginationBtn.style.display = 'inline-flex';
+        paginationBtn.disabled = false;
+        paginationBtn.textContent = 'Analyze Next Page';
+      }
+      if (paginationMsg) paginationMsg.textContent = pagesMessage(pagesAnalyzed);
+    } else {
+      if (paginationBtn) paginationBtn.style.display = 'none';
+      if (paginationMsg) {
+        paginationMsg.textContent = (pagesAnalyzed >= MAX_PAGES
+          ? 'Maximum pages analyzed'
+          : 'All available pages analyzed');
+      }
+    }
+  }
+
+  function pagesMessage(n) {
+    return (n <= 1 ? '1 PAGE ANALYZED' : n + ' PAGES ANALYZED');
+  }
+
+  function setPaginationLoading(loading) {
+    isPaginating = loading; // synchronous so a 2nd click is rejected
+    var paginationBtn = document.getElementById('paginationBtn');
+    var paginationMsg = document.getElementById('paginationMsg');
+    if (paginationBtn) {
+      paginationBtn.disabled = loading;
+      paginationBtn.setAttribute('aria-busy', loading ? 'true' : 'false');
+      paginationBtn.textContent = loading ? 'Analyzing Next Page...' : 'Analyze Next Page';
+    }
+    if (loading && paginationMsg) paginationMsg.textContent = 'Analyzing Next Page...';
+  }
+
+  function showPaginationMessage(msg) {
+    var paginationSection = document.getElementById('paginationSection');
+    var paginationBtn = document.getElementById('paginationBtn');
+    var paginationMsg = document.getElementById('paginationMsg');
+    if (!paginationSection || !paginationMsg) return;
+    paginationSection.style.display = 'block';
+    if (paginationBtn) paginationBtn.style.display = 'none';
+    paginationMsg.textContent = msg || '';
+  }
+
+  // Volatile Amazon tracking params (popup-local mirror of the content-script
+  // rule): ref-family, pd_*/pf_* noise, pldn_*, psc, srs, spIA, qid, sr,
+  // session/slot ids never identify a page and are stripped for loops.
+  function isVolatilePageParamLocal(name) {
+    var n = String(name || '').toLowerCase();
+    if (!n) return false;
+    if (n === 'ref' || n === 'psc' || n === 'qid' || n === 'sr' ||
+        n === 'th' || n === 'keywords' || n === '__mk' || n === 'smid' ||
+        n === 'dchild' || n === 'srs' || n === 'spia' || n === 'sp_ia' ||
+        n === 'slot' || n === 'slotid') return true;
+    if (n.indexOf('pd_') === 0) return true;
+    if (n.indexOf('ref_') === 0) return true;
+    if (n.indexOf('pf_rd_') === 0) return true;
+    if (n.indexOf('pldn') === 0) return true;
+    if (n === 'pf') return true;
+    return false;
+  }
+
+  // Canonical page URL (popup-local loop-protection mirror): strips volatile
+  // tracking params + fragment, sorts the rest for order-insensitivity.
+  function canonicalPageUrlLocal(url) {
+    if (typeof url !== 'string') return '';
+    var trimmed = url.trim();
+    if (!trimmed || trimmed === '#') return '';
+    try {
+      var u = new URL(trimmed, originPageUrl || 'https://www.amazon.in/');
+      var keep = [];
+      var seen = {};
+      var params = u.search ? u.search.slice(1).split('&') : [];
+      for (var i = 0; i < params.length; i++) {
+        var pair = params[i];
+        if (!pair) continue;
+        var eqIdx = pair.indexOf('=');
+        var rawName = eqIdx === -1 ? pair : pair.slice(0, eqIdx);
+        var name = rawName;
+        try { name = decodeURIComponent(rawName); } catch (e) { name = rawName; }
+        if (isVolatilePageParamLocal(name)) continue;
+        if (seen[pair]) continue;
+        seen[pair] = true;
+        keep.push(pair);
+      }
+      var sorted = keep.slice().sort().join('&');
+      var host = (u.hostname || '').toLowerCase();
+      var port = u.port || '';
+      if ((u.protocol === 'https:' && port === '443') ||
+          (u.protocol === 'http:' && port === '80')) port = '';
+      var path = u.pathname || '/';
+      if (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
+      return u.protocol + '//' + host + (port ? ':' + port : '') + path +
+        (sorted ? '?' + sorted : '');
+    } catch (e) {
+      return trimmed.split('#')[0];
+    }
+  }
+
+  // "Analyze Next Page": orchestrated by the background worker, which opens
+  // the next Amazon search-results page in a temporary INACTIVE tab, loads
+  // the REAL page, extracts via the content script, then closes the temp
+  // tab. The user's active tab never navigates. No fetch()/DOMParser.
+  //
+  // Merge: new products are concatenated into the RAW union and the SAME
+  // pipeline (dedup -> validate -> budget -> sponsored -> sort) is re-run,
+  // so a page-2 product can become #1. Failures NEVER erase existing
+  // results. Load More (#6) is untouched and keeps working independently.
+  function analyzeNextPage() {
+    if (isPaginating) return; // double-click protection
+    if (pagesAnalyzed >= MAX_PAGES) return; // hard cap
+    if (!nextPageUrl) return;
+
+    var canon;
+    try { canon = canonicalPageUrlLocal(nextPageUrl); }
+    catch (e) { canon = nextPageUrl; }
+    if (!canon || visitedPages.has(canon)) {
+      nextPageUrl = null; // loop target — stop without losing results
+      updatePaginationSection(false);
+      return;
+    }
+
+    setPaginationLoading(true);
+
+    var visitedList = [];
+    try {
+      visitedPages.forEach(function (v) { visitedList.push(v); });
+    } catch (e) { visitedList = []; }
+
+    var payload = {
+      action: 'analyzeNextPageBg',
+      nextPageUrl: nextPageUrl,
+      originPageUrl: originPageUrl,
+      visitedCanonical: visitedList
+    };
+
+    var done = false;
+    function finish(response) {
+      if (done) return;
+      done = true;
+      setPaginationLoading(false);
+
+      if (!response || !response.success) {
+        showPaginationMessage("Couldn't analyze the next page. Your existing results are still available.");
+        var retryBtn = document.getElementById('paginationBtn');
+        if (retryBtn) retryBtn.style.display = 'inline-flex';
+        return;
+      }
+
+      var canonNext;
+      try { canonNext = canonicalPageUrlLocal(response.pageUrl || nextPageUrl); }
+      catch (e) { canonNext = response.pageUrl || nextPageUrl; }
+      if (canonNext) {
+        if (visitedPages.has(canonNext)) {
+          nextPageUrl = response.nextPageUrl || null;
+          updatePaginationSection(!!nextPageUrl);
+          return;
+        }
+        visitedPages.add(canonNext);
+      }
+      pagesAnalyzed++;
+
+      var fresh = (response.products || []).slice();
+      if (fresh.length > 0) allProducts = allProducts.concat(fresh);
+
+      var ranked = processProducts(allProducts, currentBudget, false);
+      if (ranked && ranked.length > 0) {
+        lastRanked = ranked;
+        showResults(ranked, currentBudget.min, currentBudget.max);
+      } else if (lastRanked && lastRanked.length > 0) {
+        showResults(lastRanked, currentBudget.min, currentBudget.max);
+      }
+
+      nextPageUrl = response.nextPageUrl || null;
+      updatePaginationSection(!!nextPageUrl);
+    }
+
+    try {
+      chrome.runtime.sendMessage(payload, function (response) {
+        if (chrome.runtime.lastError) {
+          finish({ success: false });
+          return;
+        }
+        finish(response);
+      });
+    } catch (e) {
+      finish({ success: false });
+    }
+  }
+
+  var paginationBtnEl = document.getElementById('paginationBtn');
+  if (paginationBtnEl) {
+    paginationBtnEl.addEventListener('click', analyzeNextPage);
   }
 });
 
