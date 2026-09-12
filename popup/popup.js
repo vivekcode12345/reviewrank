@@ -65,10 +65,18 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // Step 3: Sort by review count descending
-      var ranked = sortByReviewCount(filtered);
+      // Step 3: Exclude sponsored products from the ranking
+      var organic = excludeSponsoredProducts(filtered);
 
-      // Step 4: Render
+      if (organic.length === 0) {
+        showError('No non-sponsored products found within this budget range. Sponsored listings are excluded from ReviewRank rankings.');
+        return;
+      }
+
+      // Step 4: Sort by review count descending
+      var ranked = sortByReviewCount(organic);
+
+      // Step 5: Render
       showResults(ranked, budget.min, budget.max);
     });
   });
@@ -142,6 +150,16 @@ document.addEventListener('DOMContentLoaded', function() {
     return copy;
   }
 
+  function excludeSponsoredProducts(products) {
+    var result = [];
+    for (var i = 0; i < products.length; i++) {
+      if (!products[i].isSponsored) {
+        result.push(products[i]);
+      }
+    }
+    return result;
+  }
+
   function deduplicateProducts(products) {
     var seen = {};       // key -> best product record
     var order = [];      // preserves insertion order of keys
@@ -182,9 +200,17 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   function mergeProductRecords(existing, incoming) {
+    // A sponsored occurrence must never override the organic occurrence of
+    // the same product — organic listings win regardless of data completeness.
+    if (!existing.isSponsored && incoming.isSponsored) {
+      return existing;
+    }
+    if (existing.isSponsored && !incoming.isSponsored) {
+      return incoming;
+    }
+    // Same sponsorship status — keep the more complete record
     var scoreA = recordCompleteness(existing);
     var scoreB = recordCompleteness(incoming);
-    // Keep the more complete record; on a tie keep the first (existing)
     return scoreB > scoreA ? incoming : existing;
   }
 

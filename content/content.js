@@ -4,19 +4,21 @@
 (function() {
   'use strict';
 
-  // Listen for messages from the popup
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'scrapeAmazon') {
-      try {
-        const products = extractAmazonProducts();
-        sendResponse({ success: true, products });
-      } catch (err) {
-        console.error('ReviewRank scrape error:', err);
-        sendResponse({ success: false, error: err.message });
+  // Listen for messages from the popup (guarded for non-browser test environments)
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.action === 'scrapeAmazon') {
+        try {
+          const products = extractAmazonProducts();
+          sendResponse({ success: true, products });
+        } catch (err) {
+          console.error('ReviewRank scrape error:', err);
+          sendResponse({ success: false, error: err.message });
+        }
+        return true;
       }
-      return true;
-    }
-  });
+    });
+  }
 
   function extractAmazonProducts() {
     const products = [];
@@ -36,6 +38,62 @@
     return products;
   }
 
+  // Detect whether an Amazon search-result card is a sponsored/ads listing.
+  // Uses multiple independent signals because Amazon changes its DOM over time:
+  //  1. data-component-type="sp-sponsored-result" (widget-level marker)
+  //  2. Known sponsored-label CSS classes (modern + legacy)
+  //  3. A leaf element whose trimmed text is exactly "Sponsored" (case-insensitive)
+  //  4. aria-label/title attributes that begin with "Sponsored"
+  // Never relies on product title or review count to determine sponsorship.
+  function detectSponsored(item) {
+    // Strategy 1: widget-level data-component-type marker on the card or a descendant
+    if (item.getAttribute && item.getAttribute('data-component-type') === 'sp-sponsored-result') {
+      return true;
+    }
+    if (item.querySelectorAll('[data-component-type="sp-sponsored-result"]').length > 0) {
+      return true;
+    }
+
+    // Strategy 2: known sponsored-label CSS classes (modern puis-* and legacy s-*)
+    const labelClasses = [
+      '.puis-sponsored-label-text',
+      '.s-sponsored-label-text',
+      '.puis-sponsored-label-txt',
+      '.s-sponsored-label-info-icon',
+      '.puis-sponsored-label-info-icon',
+      '.a-size-base.s-sponsored-label-text',
+      '.a-size-mini.s-sponsored-label-text'
+    ];
+    if (item.querySelectorAll(labelClasses.join(',')).length > 0) {
+      return true;
+    }
+
+    // Strategy 3: any leaf element whose trimmed text is exactly "Sponsored"
+    // (Amazons places a small standalone "Sponsored" label in the card)
+    const candidates = item.querySelectorAll('span, div, a, i, b');
+    for (let i = 0; i < candidates.length; i++) {
+      const el = candidates[i];
+      if (el.children && el.children.length > 0) continue; // leaf text nodes only
+      const text = (el.textContent || '').trim();
+      if (/^sponsored$/i.test(text)) {
+        return true;
+      }
+    }
+
+    // Strategy 4: aria-label / title attributes that begin with "Sponsored"
+    // (e.g. the info icon's aria-label/title "Sponsored product information")
+    const attrEls = item.querySelectorAll('[aria-label], [title]');
+    for (let i = 0; i < attrEls.length; i++) {
+      const el = attrEls[i];
+      const ariaLabel = (el.getAttribute('aria-label') || '').trim();
+      if (/^sponsored/i.test(ariaLabel)) return true;
+      const title = (el.getAttribute('title') || '').trim();
+      if (/^sponsored/i.test(title)) return true;
+    }
+
+    return false;
+  }
+
   function parseAmazonProduct(item) {
     // 1. Product title
     const titleEl = item.querySelector('h2 a span') ||
@@ -43,6 +101,9 @@
                     item.querySelector('h2');
     const title = titleEl ? titleEl.textContent.trim() : null;
     if (!title) return null;
+
+    // Sponsored detection (independent of title/review data)
+    const isSponsored = detectSponsored(item);
 
     // 2. Product URL + ASIN
     const linkEl = item.querySelector('h2 a') || item.querySelector('a.a-link-normal.s-no-outline');
@@ -102,6 +163,7 @@
       url: productUrl,
       asin: asin,
       canonicalUrl: canonicalUrl,
+      isSponsored: isSponsored,
       marketplace: 'Amazon'
     };
   }
@@ -204,5 +266,12 @@
     }
 
     return 0; // Review count unavailable — do not invent
+  }
+
+  // Expose internals for unit testing (no-op inside the browser extension)
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      detectSponsored: detectSponsored
+    };
   }
 })();
