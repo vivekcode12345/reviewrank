@@ -23,27 +23,28 @@
           <label class="budget-label">Budget Range (optional)</label>
           <div class="budget-inputs">
             <div class="budget-field">
-              <span class="currency-symbol">₹</span>
-              <input type="text" id="minPrice" placeholder="Min" autocomplete="off" inputmode="numeric">
+              <span class="currency-symbol" aria-hidden="true">₹</span>
+              <input type="text" id="minPrice" placeholder="Min" autocomplete="off" inputmode="numeric" aria-label="Minimum price in rupees">
             </div>
-            <span class="budget-separator">—</span>
+            <span class="budget-separator" aria-hidden="true">—</span>
             <div class="budget-field">
-              <span class="currency-symbol">₹</span>
-              <input type="text" id="maxPrice" placeholder="Max" autocomplete="off" inputmode="numeric">
+              <span class="currency-symbol" aria-hidden="true">₹</span>
+              <input type="text" id="maxPrice" placeholder="Max" autocomplete="off" inputmode="numeric" aria-label="Maximum price in rupees">
             </div>
           </div>
         </div>
-        <button id="analyzeBtn" class="analyze-btn">
-          <span class="btn-label">Analyze This Page</span>
-          <span class="btn-spinner" style="display:none;">
+        <button id="analyzeBtn" class="analyze-btn" aria-busy="false">
+          <span class="btn-spinner" style="display:none;" aria-hidden="true">
             <span class="spinner"></span>
           </span>
+          <span class="btn-label" id="btnLabel">Analyze This Page</span>
         </button>
+        <p id="loadingStatus" class="loading-status" role="status" aria-live="polite" style="display:none;"></p>
       </div>
 
       <!-- Error state -->
-      <div id="errorState" class="error-state" style="display:none;">
-        <span class="error-icon">⚠️</span>
+      <div id="errorState" class="error-state" style="display:none;" role="alert">
+        <span class="error-icon" aria-hidden="true">⚠️</span>
         <p id="errorText" class="error-text"></p>
         <p id="errorHint" class="error-hint" style="display:none;"></p>
       </div>
@@ -51,18 +52,20 @@
       <!-- Results state -->
       <div id="resultsState" class="results-state" style="display:none;">
         <div class="results-header">
-          <span class="results-count" id="resultsCount"></span>
+          <h2 class="results-count" id="resultsCount" aria-live="polite"></h2>
           <span class="results-sub" id="resultsSub"></span>
+          <p class="results-note" id="resultsNote"></p>
         </div>
         <div id="productsList" class="products-list"></div>
       </div>
     </main>
 
     <footer class="footer">
-      <p>Review count is a popularity indicator and does not represent verified sales.</p>
+      <p>Rating volume is a popularity indicator and does not represent verified sales.</p>
     </footer>
   </div>
 
+  <script src="../lib/display.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', function() {
+  var UI = window.ReviewRankUI;
   var initialState = document.getElementById('initialState');
   var errorState = document.getElementById('errorState');
   var resultsState = document.getElementById('resultsState');
@@ -7,44 +8,56 @@ document.addEventListener('DOMContentLoaded', function() {
   var productsList = document.getElementById('productsList');
   var resultsCount = document.getElementById('resultsCount');
   var resultsSub = document.getElementById('resultsSub');
+  var resultsNote = document.getElementById('resultsNote');
   var analyzeBtn = document.getElementById('analyzeBtn');
-  var btnLabel = analyzeBtn.querySelector('.btn-label');
+  var btnLabel = document.getElementById('btnLabel');
   var btnSpinner = analyzeBtn.querySelector('.btn-spinner');
+  var loadingStatus = document.getElementById('loadingStatus');
   var minPriceInput = document.getElementById('minPrice');
   var maxPriceInput = document.getElementById('maxPrice');
   var isAnalyzing = false;
+  var BTN_LABEL_DEFAULT = 'Analyze This Page';
+  var LOADING_TEXT = 'Analyzing Amazon products...';
+
+  function setLoading(loading) {
+    isAnalyzing = loading;
+    analyzeBtn.disabled = loading;
+    analyzeBtn.setAttribute('aria-busy', loading ? 'true' : 'false');
+    if (loading) {
+      btnLabel.textContent = LOADING_TEXT;
+      btnSpinner.style.display = 'inline-block';
+      loadingStatus.textContent = LOADING_TEXT;
+      loadingStatus.style.display = 'block';
+    } else {
+      btnLabel.textContent = BTN_LABEL_DEFAULT;
+      btnSpinner.style.display = 'none';
+      loadingStatus.textContent = '';
+      loadingStatus.style.display = 'none';
+    }
+  }
 
   analyzeBtn.addEventListener('click', function() {
-    if (isAnalyzing) return;
-    isAnalyzing = true;
-    analyzeBtn.disabled = true;
-    btnLabel.style.display = 'none';
-    btnSpinner.style.display = 'flex';
+    if (isAnalyzing) return; // prevent accidental repeated clicks
+    setLoading(true);
 
     // Parse and validate budget inputs
     var budget = parseBudgetInput(minPriceInput.value, maxPriceInput.value);
     if (budget.error) {
-      isAnalyzing = false;
-      analyzeBtn.disabled = false;
-      btnLabel.style.display = 'inline';
-      btnSpinner.style.display = 'none';
+      setLoading(false);
       showError(budget.error);
       return;
     }
 
     analyze(function(err, products) {
-      isAnalyzing = false;
-      analyzeBtn.disabled = false;
-      btnLabel.style.display = 'inline';
-      btnSpinner.style.display = 'none';
+      setLoading(false);
 
       if (err) {
-        showError(err);
+        showError(UI.friendlyErrorMessage(err));
         return;
       }
 
       if (!products || products.length === 0) {
-        showError('No products detected on this page. Try refreshing the Amazon results page.');
+        showError(UI.MESSAGES.noProducts, UI.MESSAGES.noProductsHint);
         return;
       }
 
@@ -52,7 +65,7 @@ document.addEventListener('DOMContentLoaded', function() {
       var unique = deduplicateProducts(products);
 
       if (unique.length === 0) {
-        showError('No products detected on this page. Try refreshing the Amazon results page.');
+        showError(UI.MESSAGES.noProducts, UI.MESSAGES.noProductsHint);
         return;
       }
 
@@ -60,8 +73,7 @@ document.addEventListener('DOMContentLoaded', function() {
       var filtered = filterByPriceRange(unique, budget.min, budget.max);
 
       if (filtered.length === 0) {
-        var rangeText = formatBudgetRange(budget.min, budget.max);
-        showNoResults('No products found in your price range ' + rangeText + '.', 'Try increasing your budget range.');
+        showError(UI.MESSAGES.budgetNoMatch, UI.MESSAGES.budgetNoMatchHint);
         return;
       }
 
@@ -69,11 +81,11 @@ document.addEventListener('DOMContentLoaded', function() {
       var organic = excludeSponsoredProducts(filtered);
 
       if (organic.length === 0) {
-        showError('No non-sponsored products found within this budget range. Sponsored listings are excluded from ReviewRank rankings.');
+        showError(UI.MESSAGES.allSponsored, UI.MESSAGES.allSponsoredHint);
         return;
       }
 
-      // Step 4: Sort by review count descending
+      // Step 4: Sort by review count descending (unchanged)
       var ranked = sortByReviewCount(organic);
 
       // Step 5: Render
@@ -224,19 +236,6 @@ document.addEventListener('DOMContentLoaded', function() {
     return score;
   }
 
-  function formatBudgetRange(minPrice, maxPrice) {
-    if (minPrice !== null && maxPrice !== null) {
-      return '₹' + formatNumber(minPrice) + '–₹' + formatNumber(maxPrice);
-    }
-    if (minPrice !== null) {
-      return 'above ₹' + formatNumber(minPrice);
-    }
-    if (maxPrice !== null) {
-      return 'under ₹' + formatNumber(maxPrice);
-    }
-    return '';
-  }
-
   function analyze(callback) {
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
       if (!tabs || !tabs[0]) {
@@ -287,7 +286,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   function handleResponse(response, callback) {
     if (!response || !response.success) {
-      callback(response ? response.error : 'Failed to analyze products.');
+      callback(response ? response.error : 'Could not analyze this page. Please refresh the Amazon page and try again.');
       return;
     }
     callback(null, response.products || []);
@@ -297,7 +296,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initialState.style.display = 'none';
     resultsState.style.display = 'none';
     errorState.style.display = 'block';
-    errorText.textContent = message;
+    errorText.textContent = UI.friendlyErrorMessage(message);
     if (hint) {
       errorHint.textContent = hint;
       errorHint.style.display = 'block';
@@ -306,97 +305,32 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
-  function showNoResults(message, hint) {
-    initialState.style.display = 'none';
-    resultsState.style.display = 'none';
-    errorState.style.display = 'block';
-    errorText.textContent = message;
-    errorHint.textContent = hint || '';
-    errorHint.style.display = 'block';
-  }
-
   function showResults(products, minPrice, maxPrice) {
     initialState.style.display = 'none';
     errorState.style.display = 'none';
     resultsState.style.display = 'block';
 
-    var countText = products.length + ' product' + (products.length !== 1 ? 's' : '');
-    var subText = '';
+    // Header: "8 PRODUCTS FOUND" or "8 PRODUCTS IN ₹600 – ₹1,500"
+    resultsCount.textContent = UI.resultsHeaderText(products.length, minPrice, maxPrice);
 
-    if (minPrice !== null || maxPrice !== null) {
-      var rangeStr = formatBudgetRange(minPrice, maxPrice);
-      countText += ' in ' + rangeStr;
-      subText = 'Ranked by customer review count';
-    } else {
-      subText = 'Ranked by customer review count';
-    }
+    // "RANKED BY CUSTOMER RATING COUNT"
+    resultsSub.textContent = UI.RESULTS_SUBTEXT;
 
-    resultsCount.textContent = countText;
-    resultsSub.textContent = subText;
+    // Explanation + subtle disclaimer near the results
+    resultsNote.textContent = UI.RANKED_BY_NOTE + ' — ' + UI.POPULARITY_DISCLAIMER;
+
     productsList.innerHTML = '';
 
+    // Ranks are contiguous #1..#n in the order already sorted by review count
     for (var i = 0; i < products.length; i++) {
       var rank = i + 1;
-      var card = createProductCard(products[i], rank);
-      productsList.appendChild(card);
+      var card = document.createElement('div');
+      card.innerHTML = UI.buildProductCardHTML(products[i], rank);
+      var cardEl = card.firstElementChild;
+      if (cardEl) {
+        productsList.appendChild(cardEl);
+      }
     }
-  }
-
-  function createProductCard(product, rank) {
-    var card = document.createElement('a');
-    card.className = 'product-card';
-    card.href = product.url || '#';
-    card.target = '_blank';
-    card.rel = 'noopener noreferrer';
-
-    var rankClass = rank <= 3 ? 'rank-' + rank : 'rank-default';
-    var rankLabel = rank <= 3 ? ['1.', '2.', '3.'][rank - 1] : '#' + rank;
-    var stars = getStarString(product.rating);
-    var reviewText = product.reviewCount > 0
-      ? formatNumber(product.reviewCount) + ' ratings'
-      : 'Review count unavailable';
-
-    var html = '';
-    html += '<div class="product-rank">';
-    html += '<div class="rank-badge ' + rankClass + '">' + rankLabel + '</div>';
-    html += '</div>';
-    html += '<div class="product-info">';
-    html += '<div class="product-title">' + escapeHtml(product.title) + '</div>';
-    html += '<div class="product-meta">';
-    if (product.price != null && product.price > 0) {
-      html += '<span class="product-price">₹' + formatNumber(product.price) + '</span>';
-    } else {
-      html += '<span class="product-price unavailable">Price unavailable</span>';
-    }
-    if (product.rating > 0) {
-      html += '<span class="product-rating"><span class="rating-stars">' + stars + '</span>';
-      html += '<span class="rating-value">' + product.rating.toFixed(1) + '</span></span>';
-    }
-    html += '<span class="review-count ' + (product.reviewCount > 0 ? '' : 'unavailable') + '">' + reviewText + '</span>';
-    html += '</div></div>';
-
-    card.innerHTML = html;
-    return card;
-  }
-
-  function getStarString(rating) {
-    if (!rating || rating <= 0) return '';
-    var full = Math.floor(rating);
-    var half = rating % 1 >= 0.5 ? 1 : 0;
-    var empty = 5 - full - half;
-    return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(empty);
-  }
-
-  function formatNumber(num) {
-    if (num == null) return '';
-    return num.toLocaleString('en-IN');
-  }
-
-  function escapeHtml(str) {
-    if (!str) return '';
-    var div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
   }
 });
 
