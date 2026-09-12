@@ -5,11 +5,7 @@
   "description": "Rank Amazon search results by customer review volume. See what people are choosing most.",
   "action": {
     "default_popup": "popup/popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
+    "default_icon": "icons/icons.png"
   },
   "background": {
     "service_worker": "background/background.js"
@@ -34,8 +30,8 @@
     }
   ],
   "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "icons/icons.png",
+    "48": "icons/icons.png",
+    "128": "icons/icons.png"
   }
 }

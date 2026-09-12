@@ -66,6 +66,13 @@
           </button>
           <p id="loadMoreMessage" class="load-more-message" role="status" aria-live="polite"></p>
         </div>
+        <!-- Display pagination: view results in groups of 4 -->
+        <div id="uiPagination" class="ui-pagination-section" style="display:none;">
+          <div class="ui-pagination-row">
+            <span id="uiPageLabel" class="ui-pagination-label" aria-live="polite"></span>
+            <button id="uiPageBtn" class="ui-pagination-btn" aria-busy="false">Next</button>
+          </div>
+        </div>
         <div id="paginationSection" class="pagination-section" style="display:none;">
           <button id="paginationBtn" class="analyze-next-btn" aria-busy="false">Analyze Next Page</button>
           <p id="paginationMsg" class="pagination-message" role="status" aria-live="polite"></p>
@@ -83,6 +90,7 @@
   <script src="../lib/product-validation.js"></script>
   <script src="../lib/category-relevance.js"></script>
   <script src="../lib/price-insights.js"></script>
+  <script src="../lib/pagination.js"></script>
   <script src="../background/background.js"></script>
   <script src="../content/content.js"></script>
   <script src="popup.js"></script>

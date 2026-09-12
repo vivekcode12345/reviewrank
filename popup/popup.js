@@ -41,18 +41,24 @@ document.addEventListener('DOMContentLoaded', function() {
   // pagesAnalyzed counts analyzed search-result pages (starts at 1).
   // visitedPages holds CANONICAL page URLs to prevent loops.
   // nextPageUrl is the raw next-page URL from the content script.
-  var MAX_PAGES = 5; // hard cap to prevent infinite pagination
+  var MAX_PAGES = 5;
   var pagesAnalyzed = 1;
   var visitedPages = new Set();
   var nextPageUrl = null;
   var originPageUrl = null;
   var isPaginating = false;
 
-  var MAX_LOADS = 5; // hard cap to prevent infinite loading
+  var MAX_LOADS = 5;
+
+  var PAGE_SIZE = 4;
+  var currentDisplayPage = 1;
 
   var loadMoreBtn = document.getElementById('loadMoreBtn');
   var loadMoreSection = document.getElementById('loadMoreSection');
   var loadMoreMessage = document.getElementById('loadMoreMessage');
+  var paginationUI = document.getElementById('uiPagination');
+  var uiPageBtn = document.getElementById('uiPageBtn');
+  var uiPageLabel = document.getElementById('uiPageLabel');
 
   function setLoading(loading) {
     isAnalyzing = loading;
@@ -83,7 +89,7 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    // Reset load-more, pagination AND relevance state for a fresh analysis
+    // Reset load-more, pagination AND display state for a fresh analysis
     loadMoreCount = 0;
     allProducts = [];
     pagesAnalyzed = 1;
@@ -91,6 +97,7 @@ document.addEventListener('DOMContentLoaded', function() {
     nextPageUrl = null;
     originPageUrl = null;
     isPaginating = false;
+    currentDisplayPage = 1;
     currentSearchQuery = '';
     relevanceActive = false;
     relevanceAvailable = false;
@@ -605,8 +612,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     productsList.innerHTML = '';
 
-    // Ranks are contiguous #1..#n in the order already sorted by review count
-    for (var i = 0; i < products.length; i++) {
+    var totalPages = (typeof ReviewRankPagination !== 'undefined')
+      ? ReviewRankPagination.getTotalPages(products)
+      : (Math.ceil(products.length / PAGE_SIZE) || (products.length > 0 ? 1 : 0));
+
+    var startIdx = (currentDisplayPage - 1) * PAGE_SIZE;
+    var endIdx = Math.min(startIdx + PAGE_SIZE, products.length);
+
+    for (var i = startIdx; i < endIdx; i++) {
       var rank = i + 1;
       var insight = null;
       try {
@@ -621,6 +634,40 @@ document.addEventListener('DOMContentLoaded', function() {
         productsList.appendChild(cardEl);
       }
     }
+
+    updateUIPagination(products.length, totalPages);
+  }
+
+  function updateUIPagination(productCount, totalPages) {
+    if (!paginationUI) return;
+    if (!productCount || totalPages <= 1) {
+      paginationUI.style.display = 'none';
+      return;
+    }
+    paginationUI.style.display = 'block';
+    var range = (typeof ReviewRankPagination !== 'undefined')
+      ? ReviewRankPagination.getPageRange(currentDisplayPage, productCount)
+      : { start: (currentDisplayPage - 1) * PAGE_SIZE + 1, end: Math.min(currentDisplayPage * PAGE_SIZE, productCount), total: productCount };
+    if (uiPageLabel) {
+      uiPageLabel.textContent = range.start + '-' + range.end + ' of ' + range.total;
+    }
+    if (uiPageBtn) {
+      uiPageBtn.textContent = currentDisplayPage >= totalPages ? 'End' : 'Next';
+      uiPageBtn.disabled = false;
+    }
+  }
+
+  function showNextPage() {
+    if (!lastRanked || lastRanked.length === 0) return;
+    var totalPages = ReviewRankPagination.getTotalPages(lastRanked);
+    if (currentDisplayPage >= totalPages) return;
+    currentDisplayPage++;
+    showResults(lastRanked, currentBudget.min, currentBudget.max);
+  }
+
+  var uiPageBtnEl = document.getElementById('uiPageBtn');
+  if (uiPageBtnEl) {
+    uiPageBtnEl.addEventListener('click', showNextPage);
   }
 
   // Price-insights accessors (popup-local; lib is loaded via popup.html).

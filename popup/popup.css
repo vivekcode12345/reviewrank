@@ -510,6 +510,57 @@ body {
   line-height: 1.4;
 }
 
+/* ---- Display pagination (groups of 4) ---- */
+.ui-pagination-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+  text-align: center;
+}
+
+.ui-pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.ui-pagination-label {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.ui-pagination-btn {
+  padding: 8px 16px;
+  border: 1.5px solid #4f46e5;
+  border-radius: 8px;
+  background: #fff;
+  color: #4f46e5;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+
+.ui-pagination-btn:hover {
+  background: #f5f6ff;
+  border-color: #c7d2fe;
+}
+
+.ui-pagination-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.ui-pagination-btn:focus-visible {
+  outline: 2px solid #312e81;
+  outline-offset: 2px;
+}
+
 /* ---- Pagination: Analyze Next Page (Feature #7) ---- */
 .pagination-section {
   margin-top: 12px;
