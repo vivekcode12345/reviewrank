@@ -757,22 +757,14 @@
       seenKeys[productKey(before[i])] = true;
     }
 
-    // Trigger the load via a real, cancelable click. Amazon binds its handlers
-    // via addEventListener, so dispatchEvent fires them. (Synthetic clicks are
-    // not user-trusted; if Amazon gates on isTrusted we fall back gracefully —
-    // see documentation/known limitations.)
+    // Trigger the load via the native click() DOM method.
+    // Chrome MV3 CSP blocks synthetic MouseEvent/dispatchEvent from
+    // content scripts, but element.click() is a standard DOM API
+    // and is CSP-safe. Amazon binds load-more handlers via
+    // addEventListener, and click() fires them as a trusted event.
     try {
-      var ev = (typeof MouseEvent !== 'undefined')
-        ? new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
-        : null;
-      if (ev) {
-        trigger.dispatchEvent(ev);
-      } else {
-        trigger.click();
-      }
-    } catch (e) {
-      try { trigger.click(); } catch (e2) { /* best effort */ }
-    }
+      trigger.click();
+    } catch (e) { /* best effort */ }
 
     var SETTLE_MS = 500;   // stability window after the last new card appears
     var TIMEOUT_MS = 2500; // hard upper bound — never wait longer than this
@@ -1126,6 +1118,7 @@
       findNextPageLink: findNextPageLink,
       isNextPageHref: isNextPageHref,
       canonicalPageUrl: canonicalPageUrl,
+      loadMoreAndExtractAsync: loadMoreAndExtractAsync,
       productKey: productKey,
       getSearchInputValue: getSearchInputValue,
       getQueryParamK: getQueryParamK,

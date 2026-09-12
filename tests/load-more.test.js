@@ -349,8 +349,32 @@ var hiddenPage = el('body', {}, [
 eq(findLoadMoreTrigger(hiddenPage) === null, true, 'detection: disabled load-more ignored');
 assert(findLoadMoreTrigger(dataAttrPage) === a1, 'detection: returns the exact element to click');
 
-// ---------------------------------------------------------------------------
-// Merge + pipeline tests
+  // ---------------------------------------------------------------------------
+  // CSP-safe click trigger verification
+  // ---------------------------------------------------------------------------
+  console.log('--- CSP-safe trigger ---');
+
+  // Verify trigger is found and can be clicked (native DOM click is CSP-safe)
+  assert(!!a1, 'csp: trigger found');
+  assert(typeof a1.getAttribute === 'function', 'csp: trigger is a valid DOM node');
+
+  // Verify no MouseEvent/dispatchEvent dependency in trigger detection code
+  // (CSP blocks synthetic events in MV3 extensions)
+  var triggerSource = Content.findLoadMoreTrigger.toString();
+  assert(triggerSource.indexOf('.dispatchEvent(') === -1, 'csp: no dispatchEvent() call in findLoadMoreTrigger');
+  assert(triggerSource.indexOf('new MouseEvent(') === -1, 'csp: no new MouseEvent() in findLoadMoreTrigger');
+
+  // Verify loadMoreAndExtractAsync does not use dispatchEvent or new MouseEvent
+  // (CSP blocks synthetic events in MV3 extensions)
+  var loadMoreSource = Content.loadMoreAndExtractAsync.toString();
+  assert(loadMoreSource.indexOf('.dispatchEvent(') === -1, 'csp: no dispatchEvent() call in loadMoreAndExtractAsync');
+  assert(loadMoreSource.indexOf('new MouseEvent(') === -1, 'csp: no new MouseEvent() in loadMoreAndExtractAsync');
+
+  // Verify click() approach is used (CSP-safe DOM method, not synthetic event)
+  assert(loadMoreSource.indexOf('trigger.click()') !== -1, 'csp: trigger.click() used (CSP-safe)');
+
+  // ---------------------------------------------------------------------------
+  // Merge + pipeline tests
 // ---------------------------------------------------------------------------
 console.log('--- merge + pipeline ---');
 
