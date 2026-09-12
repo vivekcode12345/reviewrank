@@ -742,6 +742,22 @@
   //   - bounded wait: settles after 500ms of stability or hard timeout at 2.5s
   //   - MutationObserver is always disconnected (no permanent observers)
   //   - returns { success, products:[new], moreAvailable, newCount, totalProducts }
+  // Trigger Load More in a CSP-safe way.
+  // .click() on <a href="javascript:..."> executes a javascript: URL (CSP-blocked).
+  // Instead: call inline onclick() directly (CSP-safe, no event dispatch, no URL
+  // execution), or .click() only on BUTTON/INPUT elements (fires listeners without
+  // navigating / executing href). Falls back to .click() for other elements that
+  // lack an onclick handler.
+  function triggerAmazonLoadMore(trigger) {
+    if (typeof trigger.onclick === 'function') {
+      try { trigger.onclick.call(trigger); } catch (e) { /* handler error */ }
+    } else if (trigger.tagName === 'BUTTON' || trigger.tagName === 'INPUT') {
+      try { trigger.click(); } catch (e) { /* best effort */ }
+    } else {
+      try { trigger.click(); } catch (e) { /* best effort */ }
+    }
+  }
+
   function loadMoreAndExtractAsync(callback) {
     var trigger = findLoadMoreTrigger();
     if (!trigger) {
@@ -757,14 +773,7 @@
       seenKeys[productKey(before[i])] = true;
     }
 
-    // Trigger the load via the native click() DOM method.
-    // Chrome MV3 CSP blocks synthetic MouseEvent/dispatchEvent from
-    // content scripts, but element.click() is a standard DOM API
-    // and is CSP-safe. Amazon binds load-more handlers via
-    // addEventListener, and click() fires them as a trusted event.
-    try {
-      trigger.click();
-    } catch (e) { /* best effort */ }
+    triggerAmazonLoadMore(trigger);
 
     var SETTLE_MS = 500;   // stability window after the last new card appears
     var TIMEOUT_MS = 2500; // hard upper bound — never wait longer than this
@@ -1115,6 +1124,7 @@
       normalizeAmazonUrl: normalizeAmazonUrl,
       extractAsinFromUrl: extractAsinFromUrl,
       findLoadMoreTrigger: findLoadMoreTrigger,
+      triggerAmazonLoadMore: triggerAmazonLoadMore,
       findNextPageLink: findNextPageLink,
       isNextPageHref: isNextPageHref,
       canonicalPageUrl: canonicalPageUrl,
