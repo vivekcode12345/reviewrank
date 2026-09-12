@@ -44,9 +44,18 @@
     const title = titleEl ? titleEl.textContent.trim() : null;
     if (!title) return null;
 
-    // 2. Product URL
+    // 2. Product URL + ASIN
     const linkEl = item.querySelector('h2 a') || item.querySelector('a.a-link-normal.s-no-outline');
     let productUrl = linkEl ? linkEl.getAttribute('href') : null;
+    let canonicalUrl = normalizeAmazonUrl(productUrl);
+
+    // ASIN from data attribute is most reliable (set on the search-result root)
+    let asin = item.getAttribute('data-asin') || null;
+    if (!asin && canonicalUrl) {
+      asin = extractAsinFromUrl(canonicalUrl);
+    }
+
+    // Keep the absolute URL for click-through (user opens the real listing)
     if (productUrl && !productUrl.startsWith('http')) {
       productUrl = 'https://www.amazon.in' + productUrl;
     }
@@ -91,8 +100,46 @@
       reviewCount,
       imageUrl,
       url: productUrl,
+      asin: asin,
+      canonicalUrl: canonicalUrl,
       marketplace: 'Amazon'
     };
+  }
+
+  function normalizeAmazonUrl(url) {
+    if (!url) return null;
+
+    // Make absolute
+    let fullUrl = url;
+    if (!fullUrl.startsWith('http')) {
+      fullUrl = 'https://www.amazon.in' + fullUrl;
+    }
+
+    try {
+      const parsed = new URL(fullUrl);
+      const path = parsed.pathname;
+
+      // Drop Amazon tracking segment from path (e.g. /ref=sr_1_1?ie=UTF8...)
+      const pathWithoutRef = path.split('/ref=')[0];
+
+      // If the path contains a product ID segment, build the canonical form
+      const dpMatch = pathWithoutRef.match(/\/(?:dp|gp\/product|product)\/([A-Z0-9]{10})/i);
+      if (dpMatch) {
+        return 'https://www.amazon.in/dp/' + dpMatch[1].toUpperCase();
+      }
+
+      // Fallback: path only, no query string, no trailing slash
+      return pathWithoutRef.replace(/\/+$/, '');
+    } catch (e) {
+      // If URL parsing fails, strip query + trailing slash as a best effort
+      return fullUrl.split('?')[0].replace(/\/+$/, '');
+    }
+  }
+
+  function extractAsinFromUrl(url) {
+    if (!url) return null;
+    const match = url.match(/\/(?:dp|gp\/product|product)\/([A-Z0-9]{10})/i);
+    return match ? match[1].toUpperCase() : null;
   }
 
   function extractReviewCount(item) {

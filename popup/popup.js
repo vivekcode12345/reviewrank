@@ -48,8 +48,16 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // Step 1: Filter by price range
-      var filtered = filterByPriceRange(products, budget.min, budget.max);
+      // Step 1: Remove duplicate products (by ASIN → canonical URL)
+      var unique = deduplicateProducts(products);
+
+      if (unique.length === 0) {
+        showError('No products detected on this page. Try refreshing the Amazon results page.');
+        return;
+      }
+
+      // Step 2: Filter by price range
+      var filtered = filterByPriceRange(unique, budget.min, budget.max);
 
       if (filtered.length === 0) {
         var rangeText = formatBudgetRange(budget.min, budget.max);
@@ -57,10 +65,10 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // Step 2: Sort by review count descending
+      // Step 3: Sort by review count descending
       var ranked = sortByReviewCount(filtered);
 
-      // Step 3: Render
+      // Step 4: Render
       showResults(ranked, budget.min, budget.max);
     });
   });
@@ -132,6 +140,62 @@ document.addEventListener('DOMContentLoaded', function() {
       return (b.reviewCount || 0) - (a.reviewCount || 0);
     });
     return copy;
+  }
+
+  function deduplicateProducts(products) {
+    var seen = {};       // key -> best product record
+    var order = [];      // preserves insertion order of keys
+
+    for (var i = 0; i < products.length; i++) {
+      var product = products[i];
+      var key = getProductKey(product, i);
+
+      if (seen.hasOwnProperty(key)) {
+        // Duplicate found — keep the most complete record
+        var best = mergeProductRecords(seen[key], product);
+        seen[key] = best;
+      } else {
+        seen[key] = product;
+        order.push(key);
+      }
+    }
+
+    var result = [];
+    for (var j = 0; j < order.length; j++) {
+      result.push(seen[order[j]]);
+    }
+    return result;
+  }
+
+  function getProductKey(product, index) {
+    // PRIMARY: ASIN (most reliable unique identifier)
+    if (product.asin) {
+      return 'asin:' + product.asin;
+    }
+    // FALLBACK: normalized canonical URL
+    if (product.canonicalUrl) {
+      return 'url:' + product.canonicalUrl;
+    }
+    // SAFETY: no ASIN and no URL — treat as unique so unrelated
+    // products (even with similar titles) are never merged.
+    return 'fallback:' + index;
+  }
+
+  function mergeProductRecords(existing, incoming) {
+    var scoreA = recordCompleteness(existing);
+    var scoreB = recordCompleteness(incoming);
+    // Keep the more complete record; on a tie keep the first (existing)
+    return scoreB > scoreA ? incoming : existing;
+  }
+
+  function recordCompleteness(product) {
+    var score = 0;
+    if (product.title) score += 1;
+    if (product.price != null && product.price > 0) score += 2;
+    if (product.rating > 0) score += 1;
+    if (product.reviewCount > 0) score += 3;
+    if (product.imageUrl) score += 1;
+    return score;
   }
 
   function formatBudgetRange(minPrice, maxPrice) {
