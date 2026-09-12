@@ -14,12 +14,13 @@
           try {
             pageHref = (typeof location !== 'undefined' && location.href) ? location.href : '';
           } catch (e) { pageHref = ''; }
-          sendResponse({ 
-            success: true, 
-            products: products, 
+          sendResponse({
+            success: true,
+            products: products,
             moreAvailable: !!findLoadMoreTrigger(),
             nextPageUrl: findNextPageLink(),
-            pageUrl: pageHref
+            pageUrl: pageHref,
+            searchQuery: extractSearchQueryContent()
           });
         } catch (err) {
           console.error('ReviewRank scrape error:', err);
@@ -487,6 +488,75 @@
       node = node.parentNode;
     }
     return false;
+  }
+
+  // ------------------------------------------------------------------
+  // Search-query extraction (Feature #8 — Category Relevance)
+  // ------------------------------------------------------------------
+  // Prefer the live Amazon search input value (current search context),
+  // fall back to the URL `k` parameter. Pure scoring lives in
+  // lib/category-relevance.js (single shared implementation); this file
+  // only reads the DOM/URL and delegates. Never uses budget inputs.
+  function getSearchInputValue() {
+    try {
+      if (typeof document === 'undefined' || !document.querySelector) return '';
+      var selectors = [
+        '#twotabsearchtextbox',
+        'input[name="field-keywords"]',
+        '#nav-search input[type="text"]',
+        'input[aria-label*="Search"]'
+      ];
+      for (var i = 0; i < selectors.length; i++) {
+        var input = null;
+        try { input = document.querySelector(selectors[i]); } catch (e) { input = null; }
+        if (input && typeof input.value === 'string' && input.value.trim().length >= 2) {
+          return input.value.trim().replace(/\s+/g, ' ');
+        }
+      }
+    } catch (e) { /* best effort */ }
+    return '';
+  }
+
+  function getQueryParamK(pageUrl) {
+    var href = pageUrl || '';
+    try {
+      if (typeof location !== 'undefined' && location.href && !href) href = location.href;
+    } catch (e) { /* noop */ }
+    if (!href) return '';
+    // Shared helper when the lib is loaded alongside the content script.
+    try {
+      var R = null;
+      if (typeof ReviewRankRelevance !== 'undefined' && ReviewRankRelevance) R = ReviewRankRelevance;
+      else if (typeof window !== 'undefined' && window.ReviewRankRelevance) R = window.ReviewRankRelevance;
+      else if (typeof globalThis !== 'undefined' && globalThis.ReviewRankRelevance) R = globalThis.ReviewRankRelevance;
+      if (R && R.extractSearchQueryFromUrl) return R.extractSearchQueryFromUrl(href);
+    } catch (e) { /* fall through to local parse */ }
+    try {
+      var m = href.match(/[?&#]k=([^&#]*)/);
+      if (!m) return '';
+      var raw = m[1].replace(/\+/g, ' ');
+      try { raw = decodeURIComponent(raw); } catch (e2) { /* keep raw */ }
+      return raw.trim();
+    } catch (e) { return ''; }
+  }
+
+  // Returns the raw (unnormalized) search query: input value wins, else URL k.
+  function extractSearchQueryContent() {
+    var fromInput = getSearchInputValue();
+    if (fromInput && fromInput.length >= 2) return fromInput;
+    try {
+      var R2 = null;
+      if (typeof ReviewRankRelevance !== 'undefined' && ReviewRankRelevance) R2 = ReviewRankRelevance;
+      else if (typeof window !== 'undefined' && window.ReviewRankRelevance) R2 = window.ReviewRankRelevance;
+      else if (typeof globalThis !== 'undefined' && globalThis.ReviewRankRelevance) R2 = globalThis.ReviewRankRelevance;
+      if (R2 && R2.extractSearchQuery) {
+        var href2 = '';
+        try { href2 = (typeof location !== 'undefined' && location.href) ? location.href : ''; } catch (e) { href2 = ''; }
+        return R2.extractSearchQuery(fromInput, href2);
+      }
+    } catch (e) { /* fallback below */ }
+    var fromUrl = getQueryParamK('');
+    return fromUrl || '';
   }
 
       // ------------------------------------------------------------------
@@ -1016,7 +1086,10 @@
       findNextPageLink: findNextPageLink,
       isNextPageHref: isNextPageHref,
       canonicalPageUrl: canonicalPageUrl,
-      productKey: productKey
+      productKey: productKey,
+      getSearchInputValue: getSearchInputValue,
+      getQueryParamK: getQueryParamK,
+      extractSearchQueryContent: extractSearchQueryContent
     };
   }
 })();

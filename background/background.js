@@ -162,8 +162,9 @@ function openNextPageInTempTab(message, sendResponse) {
     settled = true;
     var products = (resp && resp.products) || [];
     var nextUrl = (resp && resp.nextPageUrl) || null;
+    var searchQuery = (resp && resp.searchQuery) || null;
     closeTemp(function () {
-      reply({ success: true, products: products, nextPageUrl: nextUrl, pageUrl: targetUrl });
+      reply({ success: true, products: products, nextPageUrl: nextUrl, pageUrl: targetUrl, searchQuery: searchQuery });
     });
   }
   function scrapeTemp(tabId) {

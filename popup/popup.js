@@ -29,6 +29,14 @@ document.addEventListener('DOMContentLoaded', function() {
   var loadMoreCount = 0;
   var isLoadingMore = false;
   var lastRanked = [];
+  // --- Category relevance (#8) state ---
+  // currentSearchQuery is the raw Amazon search query for this analysis
+  // (from the content script's search input, falling back to the tab URL).
+  // relevanceActive = filtering ran on the current result set;
+  // relevanceAvailable = a usable query was found (else ranking is unchanged).
+  var currentSearchQuery = '';
+  var relevanceActive = false;
+  var relevanceAvailable = false;
   // --- Pagination (#7) state ---
   // pagesAnalyzed counts analyzed search-result pages (starts at 1).
   // visitedPages holds CANONICAL page URLs to prevent loops.
@@ -75,7 +83,7 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    // Reset load-more AND pagination state for a fresh analysis
+    // Reset load-more, pagination AND relevance state for a fresh analysis
     loadMoreCount = 0;
     allProducts = [];
     pagesAnalyzed = 1;
@@ -83,6 +91,9 @@ document.addEventListener('DOMContentLoaded', function() {
     nextPageUrl = null;
     originPageUrl = null;
     isPaginating = false;
+    currentSearchQuery = '';
+    relevanceActive = false;
+    relevanceAvailable = false;
     if (typeof updatePaginationSection === 'function') {
       try { updatePaginationSection(false, true); } catch (e) {}
     }
@@ -100,13 +111,22 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // Run the SAME pipeline (dedup -> validate -> budget -> sponsored -> sort).
+      // Resolve the Amazon search query (content input wins, tab URL fallback).
+      // Relevance filtering runs inside processProducts BEFORE review-count sort.
+      currentSearchQuery = resolveSearchQuery(
+        fullResponse && fullResponse.searchQuery,
+        fullResponse && fullResponse.pageUrl
+      );
+
+      // Run the SAME pipeline
+      // (dedup -> validate -> relevance -> budget -> sponsored -> sort).
       // processProducts shows the appropriate empty-state error on its own.
-      var ranked = processProducts(products, budget, true);
+      var ranked = processProducts(products, budget, true, currentSearchQuery);
       if (!ranked) return;
 
-      // Persist the RAW union of products + budget so load-more AND pagination
-      // can re-run the identical pipeline on the merged set (ONE global ranking).
+      // Persist the RAW union of products + budget + query so load-more AND
+      // pagination can re-run the identical pipeline on the merged set
+      // (ONE global ranking, ONE shared relevance function).
       allProducts = products.slice();
       currentBudget = budget;
       lastRanked = ranked;
@@ -141,15 +161,16 @@ document.addEventListener('DOMContentLoaded', function() {
       }
 
       // Merge newly-loaded products into the raw set, then re-run the SAME
-      // pipeline (dedup -> validate -> budget -> sponsored -> sort) on the
-      // combined set so every product participates in ONE global ranking.
+      // pipeline (dedup -> validate -> relevance -> budget -> sponsored ->
+      // sort) on the combined set so every product participates in ONE
+      // global ranking with ONE shared relevance function.
       var newProducts = (response.products || []).slice();
       if (newProducts.length > 0) {
         allProducts = allProducts.concat(newProducts);
         loadMoreCount++;
       }
 
-      var ranked = processProducts(allProducts, currentBudget, false);
+      var ranked = processProducts(allProducts, currentBudget, false, currentSearchQuery);
       if (ranked && ranked.length > 0) {
         lastRanked = ranked;
         showResults(ranked, currentBudget.min, currentBudget.max);
@@ -364,7 +385,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // Initial scrape: callback(err, products, moreAvailable, fullResponse)
-  // fullResponse also carries nextPageUrl + pageUrl for pagination state.
+  // fullResponse also carries nextPageUrl + pageUrl + searchQuery.
   function analyze(callback) {
     getActiveTabUrl(function(tabUrl) {
       sendTabMessage('scrapeAmazon', true, function(response) {
@@ -373,6 +394,14 @@ document.addEventListener('DOMContentLoaded', function() {
           return;
         }
         if (response && !response.pageUrl && tabUrl) response.pageUrl = tabUrl;
+        // Fallback: if the content script could not read the search input
+        // (e.g. lib not yet loaded), resolve the query from the tab URL here.
+        try {
+          if (response && !response.searchQuery && tabUrl) {
+            var fb = resolveSearchQuery('', tabUrl);
+            if (fb) response.searchQuery = fb;
+          }
+        } catch (e) {}
         callback(null, response.products || [], !!response.moreAvailable, response);
       });
     });
@@ -395,13 +424,77 @@ document.addEventListener('DOMContentLoaded', function() {
     sendTabMessage('loadMoreAmazon', false, callback);
   }
 
-  // The SINGLE source of truth for the ranking pipeline — used for BOTH the
-  // initial analysis and every load-more re-run, so there is never a second
-  // ranking algorithm:
-  //   dedup -> validate -> budget filter -> sponsored exclusion -> sort DESC
+  // Category relevance (#8) helpers — ONE shared implementation from
+  // lib/category-relevance.js. Query resolution prefers the content script's
+  // live search-input value and falls back to the tab URL `k` parameter.
+  // When no query is available we do NOT filter (ranking is unchanged).
+  function getRelevanceLib() {
+    try {
+      if (typeof window !== 'undefined' && window.ReviewRankRelevance) return window.ReviewRankRelevance;
+    } catch (e) {}
+    try {
+      if (typeof globalThis !== 'undefined' && globalThis.ReviewRankRelevance) return globalThis.ReviewRankRelevance;
+    } catch (e) {}
+    return null;
+  }
+
+  function resolveSearchQuery(contentQuery, tabUrl) {
+    var cq = (typeof contentQuery === 'string') ? contentQuery.trim().replace(/\s+/g, ' ') : '';
+    if (cq.length >= 1) return cq;
+    var url = (typeof tabUrl === 'string') ? tabUrl : '';
+    if (!url) return '';
+    try {
+      var R = getRelevanceLib();
+      if (R && R.extractSearchQueryFromUrl) {
+        var k = R.extractSearchQueryFromUrl(url);
+        if (k) return k;
+      }
+    } catch (e) {}
+    try {
+      var m = url.match(/[?&#]k=([^&#]*)/);
+      if (!m) return '';
+      var raw = m[1].replace(/\+/g, ' ');
+      try { raw = decodeURIComponent(raw); } catch (e2) { /* keep raw */ }
+      return raw.trim();
+    } catch (e) { return ''; }
+  }
+
+  // Applies the shared relevance filter. Returns
+  // { products, active, available }: active = filtering ran on a usable
+  // query; available = false means "no query → keep everything".
+  function applyRelevanceFilter(validProducts, searchQuery) {
+    try {
+      var R = getRelevanceLib();
+      if (!R || !R.filterRelevantProducts) {
+        return { products: validProducts, active: false, available: false };
+      }
+      var res = R.filterRelevantProducts(validProducts, searchQuery || '');
+      if (!res || !res.available) {
+        return { products: validProducts, active: false, available: false };
+      }
+      return {
+        products: res.relevant,
+        active: true,
+        available: true,
+        removed: res.removed || 0,
+        queryUsed: res.queryUsed || ''
+      };
+    } catch (e) {
+      return { products: validProducts, active: false, available: false };
+    }
+  }
+
+  // The SINGLE source of truth for the ranking pipeline — used for the
+  // initial analysis, every load-more re-run AND every pagination merge, so
+  // there is never a second ranking algorithm:
+  //   dedup -> validate -> relevance -> budget filter -> sponsored -> sort DESC
+  // Relevance runs BEFORE review-count sorting: a LOW-relevance 100k-rating
+  // product can never outrank a HIGH-relevance 5k-rating product.
+  // (Budget/sponsored order after relevance is equivalent for correctness and
+  // keeps the pipeline efficient; relevance always precedes the sort.)
   // When showErrors is true, empty stages surface their user-facing error;
-  // when false (load-more re-runs) they stay silent and return null.
-  function processProducts(products, budget, showErrors) {
+  // when false (load-more/pagination re-runs) they stay silent and return null.
+  function processProducts(products, budget, showErrors, searchQuery) {
     var V = window.ReviewRankValidation;
     var unique = deduplicateProducts(products);
 
@@ -417,7 +510,19 @@ document.addEventListener('DOMContentLoaded', function() {
       return null;
     }
 
-    var filtered = filterByPriceRange(valid, budget.min, budget.max);
+    // --- Category relevance (#8): conservative LOW-only exclusion ---
+    var rel = applyRelevanceFilter(valid, searchQuery);
+    relevanceActive = !!(rel && rel.active);
+    relevanceAvailable = !!(rel && rel.available);
+    var relevant = (rel && rel.products) || valid;
+
+    if (!relevant || relevant.length === 0) {
+      // Products WERE detected but none match the search intent.
+      if (showErrors) showError(UI.MESSAGES.noRelevant, UI.MESSAGES.noRelevantHint);
+      return null;
+    }
+
+    var filtered = filterByPriceRange(relevant, budget.min, budget.max);
 
     if (!filtered || filtered.length === 0) {
       if (showErrors) showError(UI.MESSAGES.budgetNoMatch, UI.MESSAGES.budgetNoMatchHint);
@@ -455,8 +560,10 @@ document.addEventListener('DOMContentLoaded', function() {
     errorState.style.display = 'none';
     resultsState.style.display = 'block';
 
-    // Header: "8 PRODUCTS FOUND" or "8 PRODUCTS IN ₹600 – ₹1,500"
-    resultsCount.textContent = UI.resultsHeaderText(products.length, minPrice, maxPrice);
+    // Header: "8 PRODUCTS FOUND" or "8 RELEVANT PRODUCTS FOUND" when
+    // relevance filtering is active (never exposes raw scores).
+    var relOn = !!(relevanceActive && relevanceAvailable);
+    resultsCount.textContent = UI.resultsHeaderText(products.length, minPrice, maxPrice, relOn);
 
     // "RANKED BY CUSTOMER RATING COUNT" + analyzed-pages progress.
     // Stays compact: "RANKED BY CUSTOMER RATING COUNT · 2 PAGES ANALYZED".
@@ -466,8 +573,17 @@ document.addEventListener('DOMContentLoaded', function() {
     } catch (e) {}
     resultsSub.textContent = sub;
 
-    // Explanation + subtle disclaimer near the results
-    resultsNote.textContent = UI.RANKED_BY_NOTE + ' — ' + UI.POPULARITY_DISCLAIMER;
+    // Explanation + subtle disclaimer near the results.
+    // Relevance note stays small; unavailable queries stay honest.
+    var note = UI.RANKED_BY_NOTE + ' — ' + UI.POPULARITY_DISCLAIMER;
+    try {
+      if (relOn && UI.RELEVANCE_NOTE) {
+        note += ' ' + UI.RELEVANCE_NOTE + '.';
+      } else if (!relevanceAvailable && UI.RELEVANCE_UNAVAILABLE_NOTE) {
+        note += ' ' + UI.RELEVANCE_UNAVAILABLE_NOTE + '.';
+      }
+    } catch (e) {}
+    resultsNote.textContent = note;
 
     productsList.innerHTML = '';
 
@@ -738,7 +854,16 @@ document.addEventListener('DOMContentLoaded', function() {
       var fresh = (response.products || []).slice();
       if (fresh.length > 0) allProducts = allProducts.concat(fresh);
 
-      var ranked = processProducts(allProducts, currentBudget, false);
+      // Pagination reuses the ORIGINAL search query so page-2 products face
+      // the identical relevance filter (adopt page query only if we never
+      // had one).
+      try {
+        if (!currentSearchQuery && response && response.searchQuery) {
+          currentSearchQuery = String(response.searchQuery).trim();
+        }
+      } catch (e) {}
+
+      var ranked = processProducts(allProducts, currentBudget, false, currentSearchQuery);
       if (ranked && ranked.length > 0) {
         lastRanked = ranked;
         showResults(ranked, currentBudget.min, currentBudget.max);
