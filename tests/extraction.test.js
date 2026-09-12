@@ -418,9 +418,46 @@ var orderChecked = sortByReviewCount([
   { title: 'SomeCount', reviewCount: 50 },
   { title: 'High', reviewCount: 500 }
 ]);
-assert(orderChecked[0].title === 'High' && orderChecked[1].title === 'SomeCount' && orderChecked[2].title === 'NoCount',
-  'missing: product without reviewCount ranks LAST, never outranks valid counts');
+  assert(orderChecked[0].title === 'High' && orderChecked[1].title === 'SomeCount' && orderChecked[2].title === 'NoCount',
+    'missing: product without reviewCount ranks LAST, never outranks valid counts');
 
-console.log('');
-console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
-process.exit(failures === 0 ? 0 : 1);
+  // --- REGRESSION TESTS FOR BUG: valid high-review products dropped ---
+
+  // Test D: "2.6K ratings" → 2600
+  var kratosCard = el('div', { 'data-component-type': 's-search-result', 'data-asin': 'B0KRATOS1' }, [
+    el('h2', {}, [el('a', { href: '/kratos-tw02/dp/B0KRATOS1' }, [el('span', {}, 'Kratos TW02 Ear Buds')])]),
+    el('span', { 'aria-label': '3.9 out of 5 stars, 2.6K ratings' }, []),
+    el('div', { class: 'a-price' }, [
+      el('span', { class: 'a-offscreen' }, '₹499')
+    ]),
+    el('span', {}, '700+ bought in past month')
+  ]);
+  var kratosParsed = X.parseAmazonProduct(kratosCard);
+  eq(kratosParsed.reviewCount, 2600, 'regression: "2.6K ratings" → 2600');
+  assert(kratosParsed.reviewCount !== 700, 'regression: "700+ bought" NOT used as review count');
+  eq(kratosParsed.price, 499, 'regression: price ₹499 → 499');
+
+  // Test E: "700+ bought in past month" text itself is NOT a review count
+  var boughtCard = el('div', {}, [
+    el('span', {}, '700+ bought in past month')
+  ]);
+  eq(X.extractReviewCount(boughtCard), null, 'regression: "700+ bought" text is NOT a review count (null)');
+
+  // Test F: Full title extraction from nested spans (brand fragment + remainder)
+  var nestedTitleCard = el('div', { 'data-component-type': 's-search-result', 'data-asin': 'B0NEST123' }, [
+    el('h2', {}, [
+      el('a', { href: '/brand-product/dp/B0NEST123' }, [
+        el('span', {}, 'Kratos'),
+        el('span', {}, 'TW02 Ear Buds Wireless with 60H Playtime')
+      ])
+    ]),
+    el('span', { 'aria-label': '3.9 out of 5 stars, 2,600 ratings' }, [])
+  ]);
+  var nestedParsed = X.parseAmazonProduct(nestedTitleCard);
+  assert(nestedParsed.title !== null && nestedParsed.title.indexOf('Kratos') !== -1, 'regression: nested title contains "Kratos"');
+  assert(nestedParsed.title !== null && nestedParsed.title.length > 10, 'regression: nested title is NOT just brand fragment (length: ' + (nestedParsed.title ? nestedParsed.title.length : 0) + ')');
+  assert(nestedParsed.title === null || nestedParsed.title.indexOf('TW02') !== -1 || nestedParsed.title.indexOf('Playtime') !== -1, 'regression: nested title contains product details not just brand');
+
+  console.log('');
+  console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
+  process.exit(failures === 0 ? 0 : 1);

@@ -218,21 +218,58 @@ console.log('--- FALSE POSITIVE PROTECTION ---');
 assert(R.calculateRelevance('Apple AirPods Case', 'airpods case').category === 'HIGH', 'fp: "case" not auto-irrelevant when query is "airpods case"');
 assert(R.calculateRelevance('USB C Charging Cable Pro', 'usb c cable').category === 'HIGH', 'fp: "cable" not auto-irrelevant when query is "usb c cable"');
 assert(R.isAccessoryToken('case') === true, 'fp: case is a known accessory term');
-assert(R.queryTokens('airpods case').indexOf('case') !== -1, 'fp: query tokens retain intent words');
+  assert(R.queryTokens('airpods case').indexOf('case') !== -1, 'fp: query tokens retain intent words');
 
-// ---------------------------------------------------------------------------
-// UI + PERFORMANCE smoke checks
-// ---------------------------------------------------------------------------
-console.log('--- UI + PERFORMANCE ---');
-eq(UI.resultsHeaderText(8, null, null, true), '8 RELEVANT PRODUCTS FOUND', 'ui: relevance header when active');
-eq(UI.resultsHeaderText(8, null, null, false), '8 PRODUCTS FOUND', 'ui: legacy header unchanged when inactive');
-eq(UI.MESSAGES.noRelevant, 'No relevant products found for this search.', 'ui: distinct empty state (not "No products found")');
-var t0 = Date.now();
-for (var i = 0; i < 2000; i++) R.calculateRelevance('boAt Airdopes 141 Wireless Bluetooth Earbuds ' + i, 'wireless airpods');
-assert(Date.now() - t0 < 2000, 'perf: 2000 relevance scores run locally with pure string ops (<2s, no network/AI)');
-assert(typeof R.ACCESSORY_TERMS.length === 'number' && R.ACCESSORY_TERMS.length <= 30, 'config: accessory dictionary stays small/maintainable');
+  // --- REGRESSION TESTS FOR BUG: valid products dropped, accessories kept ---
 
-console.log('');
-console.log('Assertions: ' + assertions);
-console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
-process.exit(failures === 0 ? 0 : 1);
+  // Test A: Query "airpods", product "Kratos TW02 Ear Buds" → HIGH (audio category terms)
+  var kratosRel = R.calculateRelevance('Kratos TW02 Ear Buds Wireless with 60H Playtime Earbuds Bluetooth TWS', 'airpods');
+  assert(kratosRel.category === 'HIGH', 'regression A: "Kratos TW02 Ear Buds" is HIGH for "airpods" (got ' + kratosRel.category + ')');
+
+  // Test B: Query "airpods", product "AirPods Case Cover" → LOW (accessory without intent)
+  var caseRel = R.calculateRelevance('AirPods Case Cover', 'airpods');
+  assert(caseRel.category === 'LOW', 'regression B: "AirPods Case Cover" is LOW for "airpods" (got ' + caseRel.category + ')');
+
+  // Test C: Ranking order 50k > 10k > 2600 > 23 > 7 (empty query = no filtering)
+  var rankProducts = [
+    mk('Low Count', 7, { asin: 'B0R1', reviewCount: 7 }),
+    mk('Medium Low', 23, { asin: 'B0R2', reviewCount: 23 }),
+    mk('Kratos Ear Buds', 2600, { asin: 'B0R3', reviewCount: 2600 }),
+    mk('Medium High', 10000, { asin: 'B0R4', reviewCount: 10000 }),
+    mk('Highest', 50000, { asin: 'B0R5', reviewCount: 50000 })
+  ];
+  var ranked = runPipeline(rankProducts, '');
+  eq(ranked.ranked.length, 5, 'regression C: 5 products ranked by review count (got ' + ranked.ranked.length + ')');
+  eq(ranked.ranked[0].reviewCount, 50000, 'regression C: #1 = 50k');
+  eq(ranked.ranked[1].reviewCount, 10000, 'regression C: #2 = 10k');
+  eq(ranked.ranked[2].reviewCount, 2600, 'regression C: #3 = 2.6k');
+  eq(ranked.ranked[3].reviewCount, 23, 'regression C: #4 = 23');
+  eq(ranked.ranked[4].reviewCount, 7, 'regression C: #5 = 7');
+
+  // Verify "airpods" query keeps Kratos (high review) while filtering non-matching
+  var airpodsRel = R.calculateRelevance('Kratos Ear Buds', 'airpods');
+  eq(airpodsRel.category, 'HIGH', 'regression C-2: Kratos is HIGH for "airpods"');
+  var airpodsFiltered = R.filterRelevantProducts(V.validateProducts(rankProducts), 'airpods');
+  eq(airpodsFiltered.relevant.length, 1, 'regression C-2: only Kratos relevant for "airpods"');
+  eq(airpodsFiltered.relevant[0].reviewCount, 2600, 'regression C-2: Kratos 2.6k retained');
+
+  // Verify AirPods Case Cover is filtered for "airpods"
+  var caseFiltered = R.filterRelevantProducts(V.validateProducts([mk('AirPods Case Cover', 23)]), 'airpods');
+  eq(caseFiltered.relevant.length, 0, 'regression C-3: AirPods Case Cover filtered for "airpods"');
+
+  // ---------------------------------------------------------------------------
+  // UI + PERFORMANCE smoke checks
+  // ---------------------------------------------------------------------------
+  console.log('--- UI + PERFORMANCE ---');
+  eq(UI.resultsHeaderText(8, null, null, true), '8 RELEVANT PRODUCTS FOUND', 'ui: relevance header when active');
+  eq(UI.resultsHeaderText(8, null, null, false), '8 PRODUCTS FOUND', 'ui: legacy header unchanged when inactive');
+  eq(UI.MESSAGES.noRelevant, 'No relevant products found for this search.', 'ui: distinct empty state (not "No products found")');
+  var t0 = Date.now();
+  for (var i = 0; i < 2000; i++) R.calculateRelevance('boAt Airdopes 141 Wireless Bluetooth Earbuds ' + i, 'wireless airpods');
+  assert(Date.now() - t0 < 2000, 'perf: 2000 relevance scores run locally with pure string ops (<2s, no network/AI)');
+  assert(typeof R.ACCESSORY_TERMS.length === 'number' && R.ACCESSORY_TERMS.length <= 30, 'config: accessory dictionary stays small/maintainable');
+
+  console.log('');
+  console.log('Assertions: ' + assertions);
+  console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
+  process.exit(failures === 0 ? 0 : 1);

@@ -157,19 +157,55 @@
       'h2',
       'span.a-size-base-plus.a-color-base.a-text-normal',
       '.s-title-instructions-style span',
-      'span[role="heading"]'
+      'span[role="heading"]',
+      'a.a-link-normal.a-text-normal',
+      'a.a-link-normal span',
+      'div.a-section.a-spacing-small span',
+      'span.a-size-base.a-size-base-plus'
     ];
+    // Amazon splits some titles across nested spans (brand fragment first,
+    // remainder after). First-match-wins would truncate to e.g. "boAt" /
+    // "Kratos", so collect every candidate and keep the LONGEST meaningful
+    // text — the full title always beats any fragment. Single-span cards are
+    // unaffected (only one candidate wins).
+    let best = null;
+    let bestEl = null;
     for (const sel of selectors) {
       const els = item.querySelectorAll(sel);
       for (const el of els) {
-        const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+        let text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+        // A leading "Sponsored" label inside the heading is chrome, not title.
+        text = text.replace(/^sponsored\s+/i, '').trim();
         // Ignore empty / placeholder titles (never used for sponsored detection)
         if (text.length >= 3 && !/^sponsored$/i.test(text)) {
-          return text;
+          if (best === null || text.length > best.length) {
+            best = text;
+            bestEl = el;
+          }
         }
       }
     }
-    return null;
+    // When the best candidate is a brand fragment (single short word), check
+    // parent/ancestor elements which may contain the full title spread across
+    // multiple child spans. The parent's textContent includes all descendants,
+    // so it captures the complete title that individual span selectors miss.
+    if (bestEl && best && best.length < 15) {
+      let node = bestEl.parentNode;
+      while (node && node !== item) {
+        try {
+          const parentText = (node.textContent || '').trim().replace(/\s+/g, ' ');
+          const cleaned = parentText.replace(/^sponsored\s+/i, '').trim();
+          // Only use parent text if it is significantly longer than the fragment
+          // and actually contains the fragment (so we don't grab unrelated content).
+          if (cleaned.length > best.length * 2 && cleaned.indexOf(best) !== -1) {
+            best = cleaned;
+            break;
+          }
+        } catch (e) { /* continue up */ }
+        node = node.parentNode;
+      }
+    }
+    return best;
   }
 
   function extractAsin(item, canonicalUrl) {
@@ -471,10 +507,14 @@
     // Explicitly mentions ratings/reviews -> plausible at any magnitude
     if (/(ratings?|reviews?)/i.test(lower)) return true;
     const trimmed = text.trim();
+    // Amazon wraps counts in parentheses in some layouts ("(2.6K)").
+    // Strip surrounding brackets for the SHAPE check only — the hard
+    // rejections above (₹, %, bought/emi/...) still see the full text.
+    const unwrapped = trimmed.replace(/^[\s([{]+/, '').replace(/[\s)\]}]+$/, '');
     // Pure comma number that is clearly large enough to be a customer count
-    if (/^[\d,]+$/.test(trimmed)) return count >= 100;
+    if (/^[\d,]+$/.test(unwrapped)) return count >= 100;
     // "1.2K" / "1M" short form without a keyword
-    if (/^[\d.]+\s*[kKmM]\s*\+?$/.test(trimmed)) return count >= 100;
+    if (/^[\d.]+\s*[kKmM]\s*\+?$/.test(unwrapped)) return count >= 100;
     return false;
   }
 
