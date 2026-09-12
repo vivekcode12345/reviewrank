@@ -585,17 +585,93 @@ document.addEventListener('DOMContentLoaded', function() {
     } catch (e) {}
     resultsNote.textContent = note;
 
+    // --- Price insights (#9): computed from the FINAL ranked set only ---
+    // (deduped + validated + relevance-filtered + in-budget + organic).
+    // Insight-only: rank order (review count) is never touched.
+    // Recalculated on every showResults call, so Load More and Pagination
+    // update automatically across the whole merged set.
+    var priceStats = null;
+    try {
+      var PI = getPriceLib();
+      if (PI && PI.calculatePriceStats) {
+        priceStats = PI.calculatePriceStats(products);
+      } else {
+        priceStats = fallbackPriceStats(products);
+      }
+    } catch (e) {
+      try { priceStats = fallbackPriceStats(products); } catch (e2) { priceStats = null; }
+    }
+    renderPriceInsights(priceStats, minPrice, maxPrice, products.length);
+
     productsList.innerHTML = '';
 
     // Ranks are contiguous #1..#n in the order already sorted by review count
     for (var i = 0; i < products.length; i++) {
       var rank = i + 1;
+      var insight = null;
+      try {
+        if (UI.productPriceInsightText && priceStats && priceStats.hasPrices) {
+          insight = UI.productPriceInsightText(products[i], priceStats);
+        }
+      } catch (e) { insight = null; }
       var card = document.createElement('div');
-      card.innerHTML = UI.buildProductCardHTML(products[i], rank);
+      card.innerHTML = UI.buildProductCardHTML(products[i], rank, insight);
       var cardEl = card.firstElementChild;
       if (cardEl) {
         productsList.appendChild(cardEl);
       }
+    }
+  }
+
+  // Price-insights accessors (popup-local; lib is loaded via popup.html).
+  function getPriceLib() {
+    try {
+      if (typeof window !== 'undefined' && window.ReviewRankPriceInsights) return window.ReviewRankPriceInsights;
+    } catch (e) {}
+    try {
+      if (typeof globalThis !== 'undefined' && globalThis.ReviewRankPriceInsights) return globalThis.ReviewRankPriceInsights;
+    } catch (e) {}
+    return null;
+  }
+
+  // Dependency-free fallback mirroring lib/price-insights.js semantics.
+  function fallbackPriceStats(products) {
+    var prices = [];
+    for (var i = 0; i < (products || []).length; i++) {
+      var pr = products[i] ? products[i].price : undefined;
+      if (typeof pr === 'number' && isFinite(pr) && !isNaN(pr) && pr >= 0) prices.push(pr);
+    }
+    if (prices.length === 0) {
+      return { count: (products || []).length, validCount: 0, lowest: null, highest: null, average: null, hasPrices: false };
+    }
+    var lo = prices[0], hi = prices[0], sum = 0, j;
+    for (j = 0; j < prices.length; j++) {
+      if (prices[j] < lo) lo = prices[j];
+      if (prices[j] > hi) hi = prices[j];
+      sum += prices[j];
+    }
+    return { count: (products || []).length, validCount: prices.length, lowest: lo, highest: hi, average: Math.round(sum / prices.length), hasPrices: true };
+  }
+
+  // Compact secondary block under the header: title + Lowest/Average/Highest
+  // (+ "N products within budget" when a budget is active). Hidden-safe:
+  // never renders ₹0/₹null/NaN — unavailable shows a muted single line.
+  function renderPriceInsights(stats, minPrice, maxPrice, rankedCount) {
+    var box = document.getElementById('priceInsights');
+    if (!box) return;
+    try {
+      var hasBudget = (minPrice !== null && minPrice !== undefined) ||
+        (maxPrice !== null && maxPrice !== undefined);
+      var title = (UI.PRICE_INSIGHTS_TITLE || 'PRICE INSIGHTS');
+      var html = '<div class="price-insights-title">' + title + '</div>';
+      html += UI.priceInsightsHTML(stats);
+      if (hasBudget && stats && stats.hasPrices) {
+        html += '<div class="price-budget-line">' + UI.budgetCountText(rankedCount) + '</div>';
+      }
+      box.innerHTML = html;
+      box.style.display = 'block';
+    } catch (e) {
+      try { box.style.display = 'none'; } catch (e2) {}
     }
   }
 
