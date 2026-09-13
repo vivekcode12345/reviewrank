@@ -15,11 +15,61 @@ try {
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }
 
+// Track the tab where ReviewRank Side Panel was explicitly opened.
+// The panel is ONLY enabled/available for that tab; all other tabs have
+// no ReviewRank panel at all.
+var reviewRankTabId = null;
+
+function isReviewRankTab(tabId) {
+  return reviewRankTabId !== null && reviewRankTabId === tabId;
+}
+
+function markReviewRankTab(tabId) {
+  reviewRankTabId = tabId;
+}
+
+function unmarkReviewRankTab(tabId) {
+  if (reviewRankTabId === tabId) {
+    reviewRankTabId = null;
+  }
+}
+
 // Open Side Panel when the extension icon is clicked.
+// The panel is associated with the specific tab only.
 try {
   if (typeof chrome !== 'undefined' && chrome.action && chrome.action.onClicked && chrome.sidePanel && chrome.sidePanel.open) {
     chrome.action.onClicked.addListener((tab) => {
+      markReviewRankTab(tab.id);
+      try {
+        chrome.sidePanel.setOptions({ tabId: tab.id, path: 'sidepanel/sidepanel.html', enabled: true });
+      } catch (e) { /* best effort */ }
       chrome.sidePanel.open({ tabId: tab.id });
+    });
+  }
+} catch (e) { /* non-Chrome runtimes (unit tests) */ }
+
+// When the user switches tabs:
+// - If the newly active tab is the ReviewRank tab, ensure the panel is enabled and open.
+// - For all other tabs, do nothing (the panel is simply not available).
+try {
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onActivated) {
+    chrome.tabs.onActivated.addListener((activeInfo) => {
+      if (isReviewRankTab(activeInfo.tabId)) {
+        try {
+          chrome.sidePanel.setOptions({ tabId: activeInfo.tabId, path: 'sidepanel/sidepanel.html', enabled: true });
+        } catch (e) { /* best effort */ }
+        chrome.sidePanel.open({ tabId: activeInfo.tabId });
+      }
+      // For non-associated tabs: do nothing. The panel is not available.
+    });
+  }
+} catch (e) { /* non-Chrome runtimes (unit tests) */ }
+
+// Clean up tracking when a tab is closed.
+try {
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onRemoved) {
+    chrome.tabs.onRemoved.addListener((tabId) => {
+      unmarkReviewRankTab(tabId);
     });
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }

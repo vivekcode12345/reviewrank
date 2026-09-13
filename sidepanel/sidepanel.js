@@ -973,7 +973,18 @@ document.addEventListener('DOMContentLoaded', function() {
     closeSidePanelBtn.addEventListener('click', function() {
       try {
         if (chrome.sidePanel && chrome.sidePanel.close) {
-          chrome.sidePanel.close();
+          chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+            if (chrome.runtime.lastError) {
+              return;
+            }
+            var tabId = (tabs && tabs[0]) ? tabs[0].id : null;
+            if (tabId !== null) {
+              chrome.sidePanel.close({ tabId: tabId }).catch(function() {
+                // Ignore "No active tab-specific side panel" errors;
+                // the panel may already be closed or not tab-specific.
+              });
+            }
+          });
         }
       } catch (e) { /* best effort */ }
     });
