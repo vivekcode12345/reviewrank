@@ -57,8 +57,10 @@ document.addEventListener('DOMContentLoaded', function() {
   var loadMoreSection = document.getElementById('loadMoreSection');
   var loadMoreMessage = document.getElementById('loadMoreMessage');
   var paginationUI = document.getElementById('uiPagination');
+  var uiPrevBtn = document.getElementById('uiPrevBtn');
   var uiPageBtn = document.getElementById('uiPageBtn');
   var uiPageLabel = document.getElementById('uiPageLabel');
+  var uiPageNumbers = document.getElementById('uiPageNumbers');
 
   function setLoading(loading) {
     isAnalyzing = loading;
@@ -635,25 +637,64 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     }
 
-    updateUIPagination(products.length, totalPages);
+    updateUIPagination(products, totalPages);
   }
 
-  function updateUIPagination(productCount, totalPages) {
+  function updateUIPagination(products, totalPages) {
     if (!paginationUI) return;
+    var productCount = products ? products.length : 0;
     if (!productCount || totalPages <= 1) {
       paginationUI.style.display = 'none';
       return;
     }
     paginationUI.style.display = 'block';
+
     var range = (typeof ReviewRankPagination !== 'undefined')
-      ? ReviewRankPagination.getPageRange(currentDisplayPage, productCount)
+      ? ReviewRankPagination.getPageRange(currentDisplayPage, products)
       : { start: (currentDisplayPage - 1) * PAGE_SIZE + 1, end: Math.min(currentDisplayPage * PAGE_SIZE, productCount), total: productCount };
     if (uiPageLabel) {
       uiPageLabel.textContent = range.start + '-' + range.end + ' of ' + range.total;
     }
+
+    if (uiPrevBtn) {
+      if (currentDisplayPage <= 1) {
+        uiPrevBtn.style.display = 'none';
+      } else {
+        uiPrevBtn.style.display = 'inline-flex';
+        uiPrevBtn.disabled = false;
+      }
+    }
+
     if (uiPageBtn) {
-      uiPageBtn.textContent = currentDisplayPage >= totalPages ? 'End' : 'Next';
-      uiPageBtn.disabled = false;
+      if (currentDisplayPage >= totalPages) {
+        uiPageBtn.style.display = 'none';
+      } else {
+        uiPageBtn.style.display = 'inline-flex';
+        uiPageBtn.disabled = false;
+        uiPageBtn.textContent = 'Next';
+      }
+    }
+
+    renderPageNumbers(totalPages);
+  }
+
+  function renderPageNumbers(totalPages) {
+    if (!uiPageNumbers) return;
+    uiPageNumbers.innerHTML = '';
+
+    for (var p = 1; p <= totalPages; p++) {
+      var btn = document.createElement('button');
+      btn.className = 'ui-page-num' + (p === currentDisplayPage ? ' active' : '');
+      btn.textContent = p;
+      btn.setAttribute('aria-busy', 'false');
+      (function(page) {
+        btn.addEventListener('click', function() {
+          if (currentDisplayPage === page) return;
+          currentDisplayPage = page;
+          showResults(lastRanked, currentBudget.min, currentBudget.max);
+        });
+      })(p);
+      uiPageNumbers.appendChild(btn);
     }
   }
 
@@ -665,9 +706,22 @@ document.addEventListener('DOMContentLoaded', function() {
     showResults(lastRanked, currentBudget.min, currentBudget.max);
   }
 
+  function showPrevPage() {
+    if (!lastRanked || lastRanked.length === 0) return;
+    if (currentDisplayPage <= 1) return;
+    currentDisplayPage--;
+    showResults(lastRanked, currentBudget.min, currentBudget.max);
+  }
+
   var uiPageBtnEl = document.getElementById('uiPageBtn');
   if (uiPageBtnEl) {
+    uiPageBtnEl.removeEventListener('click', showNextPage);
     uiPageBtnEl.addEventListener('click', showNextPage);
+  }
+
+  var uiPrevBtnEl = document.getElementById('uiPrevBtn');
+  if (uiPrevBtnEl) {
+    uiPrevBtnEl.addEventListener('click', showPrevPage);
   }
 
   // Price-insights accessors (popup-local; lib is loaded via popup.html).

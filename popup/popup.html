@@ -69,9 +69,11 @@
         <!-- Display pagination: view results in groups of 4 -->
         <div id="uiPagination" class="ui-pagination-section" style="display:none;">
           <div class="ui-pagination-row">
-            <span id="uiPageLabel" class="ui-pagination-label" aria-live="polite"></span>
+            <button id="uiPrevBtn" class="ui-pagination-btn" aria-busy="false">Previous</button>
+            <span id="uiPageNumbers" class="ui-page-numbers" aria-label="Page numbers"></span>
             <button id="uiPageBtn" class="ui-pagination-btn" aria-busy="false">Next</button>
           </div>
+          <span id="uiPageLabel" class="ui-pagination-label" aria-live="polite"></span>
         </div>
         <div id="paginationSection" class="pagination-section" style="display:none;">
           <button id="paginationBtn" class="analyze-next-btn" aria-busy="false">Analyze Next Page</button>
