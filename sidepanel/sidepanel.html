@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ReviewRank</title>
-  <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
   <div class="popup">
@@ -12,6 +12,7 @@
       <div class="logo-row">
         <img src="../icons/icons.png" alt="ReviewRank" class="logo-icon" width="34" height="34">
         <h1>ReviewRank</h1>
+        <button id="closeSidePanelBtn" class="close-btn" aria-label="Close panel">✕</button>
       </div>
       <p class="tagline">Ranking products by customer review volume</p>
     </header>
@@ -91,6 +92,6 @@
   <script src="../lib/pagination.js"></script>
   <script src="../background/background.js"></script>
   <script src="../content/content.js"></script>
-  <script src="popup.js"></script>
+  <script src="sidepanel.js"></script>
 </body>
 </html>

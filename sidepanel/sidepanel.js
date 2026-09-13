@@ -967,5 +967,16 @@ document.addEventListener('DOMContentLoaded', function() {
       showInitialState();
     });
   }
+
+  var closeSidePanelBtn = document.getElementById('closeSidePanelBtn');
+  if (closeSidePanelBtn) {
+    closeSidePanelBtn.addEventListener('click', function() {
+      try {
+        if (chrome.sidePanel && chrome.sidePanel.close) {
+          chrome.sidePanel.close();
+        }
+      } catch (e) { /* best effort */ }
+    });
+  }
 });
 

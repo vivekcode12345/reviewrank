@@ -4,8 +4,10 @@
   "version": "2.0.0",
   "description": "Rank Amazon search results by customer review volume. See what people are choosing most.",
   "action": {
-    "default_popup": "popup/popup.html",
     "default_icon": "icons/icons.png"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
   },
   "background": {
     "service_worker": "background/background.js"
@@ -13,7 +15,8 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "tabs"
+    "tabs",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://www.amazon.in/*",

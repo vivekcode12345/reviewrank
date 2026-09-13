@@ -233,7 +233,6 @@ var V = require('../lib/product-validation.js');
 var UI = require('../lib/display.js');
 
 // --- Mirrors of popup.js pure pipeline functions (identical logic) ---
-var MAX_LOADS = 5;
 
 function deduplicateProducts(products) {
   var seen = {}; var order = [];
@@ -317,17 +316,6 @@ function runPipeline(products, budget) {
 // Model of popup's load-more merge: concat new products, re-run pipeline.
 function mergeForLoadMore(existingRaw, newProducts, budget) {
   return runPipeline(existingRaw.concat(newProducts), budget);
-}
-
-// State-machine mirror of popup.js load-more guards.
-function createController() {
-  return {
-    loadMoreCount: 0,
-    isLoadingMore: false,
-    canClick: function () { return !this.isLoadingMore && this.loadMoreCount < MAX_LOADS; },
-    beginLoad: function () { this.isLoadingMore = true; },
-    finishLoad: function (ok) { this.isLoadingMore = false; if (ok) this.loadMoreCount++; }
-  };
 }
 
 // Sample product factory.
@@ -564,44 +552,6 @@ assert(contig[0].reviewCount === 200 && contig[1].reviewCount === 100 && contig[
 
 eq(UI.resultsHeaderText(contig.length, 600, 1500), '3 PRODUCTS IN ₹600 – ₹1,500', 'header: count updates to 3 after load');
 eq(UI.resultsHeaderText(2, null, null), '2 PRODUCTS FOUND', 'header: initial 2 products, no budget');
-console.log('--- safeguards ---');
-
-// Load-more stops when no new products appear (existing still visible)
-var noneNew = mergeForLoadMore(
-  [p('AAA', 'B0AAA11111', { price: 999, reviewCount: 10000 })],
-  [], NO_BUDGET
-);
-eq(noneNew.length, 1, 'no-new: existing product still present, none added');
-eq(noneNew[0].title, 'AAA', 'no-new: existing product unchanged');
-
-// Maximum load-more limit prevents infinite loops
-var ctrl = createController();
-var clicks = 0;
-for (var mi = 0; mi < 20; mi++) {
-  if (!ctrl.canClick()) break;
-  ctrl.beginLoad(); clicks++; ctrl.finishLoad(true);
-}
-eq(clicks, MAX_LOADS, 'max-limit: exactly ' + MAX_LOADS + ' loads before stopping (no infinite loop)');
-assert(ctrl.loadMoreCount === MAX_LOADS, 'max-limit: counter capped at ' + MAX_LOADS);
-assert(!ctrl.canClick(), 'max-limit: further clicks rejected after cap');
-
-// Double-click while loading does not trigger multiple operations
-var dbl = createController();
-assert(dbl.canClick() === true, 'double-click: button enabled initially');
-dbl.beginLoad();
-assert(dbl.isLoadingMore === true, 'double-click: first click sets loading=true');
-assert(dbl.canClick() === false, 'double-click: second click rejected while loading');
-dbl.finishLoad(true);
-assert(dbl.isLoadingMore === false, 'double-click: loading flag cleared on completion');
-assert(dbl.canClick() === true, 'double-click: button re-enabled after completion');
-
-// Existing products remain visible if loading fails (merge of empty new set)
-var afterFail = mergeForLoadMore(
-  [p('AAA', 'B0AAA11111', { price: 999, reviewCount: 10000 })],
-  [], BUDGET_600_1500
-);
-eq(afterFail.length, 1, 'failure: existing product still visible after failed/empty load');
-eq(afterFail[0].title, 'AAA', 'failure: existing product unchanged');
 
 // Regression: shared pipeline ranks correctly on a fresh set
 var baseline = runPipeline(

@@ -15,6 +15,15 @@ try {
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }
 
+// Open Side Panel when the extension icon is clicked.
+try {
+  if (typeof chrome !== 'undefined' && chrome.action && chrome.action.onClicked && chrome.sidePanel && chrome.sidePanel.open) {
+    chrome.action.onClicked.addListener((tab) => {
+      chrome.sidePanel.open({ tabId: tab.id });
+    });
+  }
+} catch (e) { /* non-Chrome runtimes (unit tests) */ }
+
 // --- Pagination validation (pure logic, shared with content-script rules) ---
 // A candidate "next page" URL is accepted only when it represents another
 // Amazon SEARCH-RESULTS page in the SAME search. Product, review,
