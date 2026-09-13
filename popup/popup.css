@@ -217,6 +217,36 @@ body {
   border-bottom: 1px solid #e2e8f0;
 }
 
+.results-actions {
+  margin-bottom: 10px;
+}
+
+.change-budget-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #6366f1;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.change-budget-btn:hover {
+  background: #f5f3ff;
+  border-color: #c7d2fe;
+  box-shadow: 0 1px 2px rgba(99, 102, 241, 0.08);
+}
+
+.change-budget-btn:focus-visible {
+  outline: 2px solid #312e81;
+  outline-offset: 2px;
+}
+
 .results-count {
   font-size: 14px;
   font-weight: 700;

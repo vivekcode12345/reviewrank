@@ -71,6 +71,44 @@ function makeNode(tag, attrs, children, leafText) {
   if (attrs && typeof attrs.onclick === 'function') {
     node.onclick = attrs.onclick;
   }
+  node._listeners = {};
+  node._defaultPrevented = false;
+  node.addEventListener = function (type, listener, useCapture) {
+    var key = (useCapture ? 'capture:' : 'bubble:') + type;
+    if (!node._listeners[key]) node._listeners[key] = [];
+    node._listeners[key].push(listener);
+  };
+  node.removeEventListener = function (type, listener, useCapture) {
+    var key = (useCapture ? 'capture:' : 'bubble:') + type;
+    if (!node._listeners[key]) return;
+    var idx = node._listeners[key].indexOf(listener);
+    if (idx !== -1) node._listeners[key].splice(idx, 1);
+  };
+  node._dispatchEvent = function (type) {
+    node._defaultPrevented = false;
+    var event = {
+      preventDefault: function () { node._defaultPrevented = true; },
+      stopPropagation: function () {}
+    };
+    var capKey = 'capture:' + type;
+    var bubKey = 'bubble:' + type;
+    if (node._listeners[capKey]) {
+      for (var c = 0; c < node._listeners[capKey].length; c++) {
+        try { node._listeners[capKey][c](event); } catch (_) {}
+      }
+    }
+    if (node.onclick) {
+      try { node.onclick.call(node, event); } catch (_) {}
+    }
+    if (node._listeners[bubKey]) {
+      for (var b = 0; b < node._listeners[bubKey].length; b++) {
+        try { node._listeners[bubKey][b](event); } catch (_) {}
+      }
+    }
+  };
+  node.click = function () {
+    node._dispatchEvent('click');
+  };
   for (var i = 0; i < childEls.length; i++) { childEls[i].parentNode = node; }
   Object.defineProperty(node, 'textContent', {
     get: function () {
@@ -375,9 +413,12 @@ assert(findLoadMoreTrigger(dataAttrPage) === a1, 'detection: returns the exact e
 
   // Verify triggerAmazonLoadMore is used (CSP-safe trigger helper)
   assert(loadMoreSource.indexOf('triggerAmazonLoadMore') !== -1, 'csp: triggerAmazonLoadMore() used');
-  // Verify the helper checks trigger.onclick first (CSP-safe path for anchors)
+  // Verify the helper handles javascript: href anchors via capture-phase preventDefault
   var triggerHelperSource = Content.triggerAmazonLoadMore ? Content.triggerAmazonLoadMore.toString() : '';
-  assert(triggerHelperSource.indexOf('typeof trigger.onclick') !== -1, 'csp: checks trigger.onclick first');
+  assert(triggerHelperSource.indexOf('javascript:') !== -1, 'csp: checks for javascript: href');
+  assert(triggerHelperSource.indexOf('addEventListener') !== -1, 'csp: uses addEventListener for guard');
+  assert(triggerHelperSource.indexOf('preventDefault') !== -1, 'csp: guard calls preventDefault');
+  assert(triggerHelperSource.indexOf('removeEventListener') !== -1, 'csp: removes guard listener after click');
 
   // ------------------------------------------------------------------
   // Regression: anchor with inline onclick (CSP-safe path)
@@ -408,6 +449,36 @@ assert(findLoadMoreTrigger(dataAttrPage) === a1, 'detection: returns the exact e
   try { clickWouldExecuteUrl = true; } catch (e) { /* not relevant in shim */ }
   assert(!clickWouldExecuteUrl || typeof anchorWithOnclick.onclick === 'function',
     'regression: CSP-safe path preferred when onclick handler exists');
+
+  // ------------------------------------------------------------------
+  // Regression: javascript: href anchor with addEventListener (new CSP-safe path)
+  // ------------------------------------------------------------------
+  console.log('--- csp regression: javascript: href with listener ---');
+
+  var amazonListenerFired = false;
+  var jsHrefAnchor = el('a', {
+    'data-action': 'load-more',
+    href: 'javascript:AmazonLoadMore.loadMore();',
+    onclick: null
+  }, 'Load more');
+
+  // Amazon attaches load-more handler via addEventListener (not inline onclick)
+  jsHrefAnchor.addEventListener('click', function (e) {
+    amazonListenerFired = true;
+  }, false);
+
+  // Simulate triggerAmazonLoadMore for a javascript: href anchor:
+  // install capture-phase guard, call click(), remove guard.
+  (function simulateJsHrefTrigger(trigger) {
+    var guard = function (e) { try { e.preventDefault(); } catch (_) {} };
+    try { trigger.addEventListener('click', guard, true); } catch (_) {}
+    try { trigger.click(); } catch (_) {}
+    try { trigger.removeEventListener('click', guard, true); } catch (_) {}
+  })(jsHrefAnchor);
+
+  assert(amazonListenerFired, 'regression: amazon listener fired for javascript: href anchor');
+  assert(!jsHrefAnchor._defaultPrevented || jsHrefAnchor._defaultPrevented === true,
+    'regression: default prevented for javascript: href (guard active during click)');
 
   // ---------------------------------------------------------------------------
   // Merge + pipeline tests

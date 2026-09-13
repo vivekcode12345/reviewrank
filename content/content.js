@@ -744,17 +744,34 @@
   //   - returns { success, products:[new], moreAvailable, newCount, totalProducts }
   // Trigger Load More in a CSP-safe way.
   // .click() on <a href="javascript:..."> executes a javascript: URL (CSP-blocked).
-  // Instead: call inline onclick() directly (CSP-safe, no event dispatch, no URL
-  // execution), or .click() only on BUTTON/INPUT elements (fires listeners without
-  // navigating / executing href). Falls back to .click() for other elements that
-  // lack an onclick handler.
+  // Workaround: temporarily install a capture-phase listener that calls
+  // preventDefault() to block the javascript: URL, while still allowing
+  // Amazon's target/bubbling-phase handlers to run. The listener is removed
+  // immediately after the click. For buttons and non-javascript anchors,
+  // plain .click() is used directly. Inline onclick handlers are still called
+  // directly when present.
   function triggerAmazonLoadMore(trigger) {
     if (typeof trigger.onclick === 'function') {
       try { trigger.onclick.call(trigger); } catch (e) { /* handler error */ }
-    } else if (trigger.tagName === 'BUTTON' || trigger.tagName === 'INPUT') {
+      return;
+    }
+
+    var tag = (typeof trigger.tagName === 'string') ? trigger.tagName.toLowerCase() : '';
+    if (tag === 'button' || tag === 'input') {
       try { trigger.click(); } catch (e) { /* best effort */ }
+      return;
+    }
+
+    var href = (typeof trigger.getAttribute === 'function') ? trigger.getAttribute('href') : '';
+    var isJsHref = (typeof href === 'string' && href.toLowerCase().indexOf('javascript:') === 0);
+
+    if (isJsHref) {
+      var guard = function (e) { try { e.preventDefault(); } catch (_) {} };
+      try { trigger.addEventListener('click', guard, true); } catch (_) {}
+      try { trigger.click(); } catch (_) {}
+      try { trigger.removeEventListener('click', guard, true); } catch (_) {}
     } else {
-      try { trigger.click(); } catch (e) { /* best effort */ }
+      try { trigger.click(); } catch (_) {}
     }
   }
 

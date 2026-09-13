@@ -61,6 +61,7 @@ document.addEventListener('DOMContentLoaded', function() {
   var uiPageBtn = document.getElementById('uiPageBtn');
   var uiPageLabel = document.getElementById('uiPageLabel');
   var uiPageNumbers = document.getElementById('uiPageNumbers');
+  var changeBudgetBtn = document.getElementById('changeBudgetBtn');
 
   function setLoading(loading) {
     isAnalyzing = loading;
@@ -562,6 +563,13 @@ document.addEventListener('DOMContentLoaded', function() {
     } else {
       errorHint.style.display = 'none';
     }
+  }
+
+  function showInitialState() {
+    initialState.style.display = 'block';
+    resultsState.style.display = 'none';
+    errorState.style.display = 'none';
+    currentDisplayPage = 1;
   }
 
   function showResults(products, minPrice, maxPrice) {
@@ -1068,6 +1076,12 @@ document.addEventListener('DOMContentLoaded', function() {
   var paginationBtnEl = document.getElementById('paginationBtn');
   if (paginationBtnEl) {
     paginationBtnEl.addEventListener('click', analyzeNextPage);
+  }
+
+  if (changeBudgetBtn) {
+    changeBudgetBtn.addEventListener('click', function() {
+      showInitialState();
+    });
   }
 });
 
