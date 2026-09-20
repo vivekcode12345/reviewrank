@@ -49,8 +49,10 @@ try {
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }
 
 // When the user switches tabs:
-// - If the newly active tab is the ReviewRank tab, ensure the panel is enabled and open.
-// - For all other tabs, do nothing (the panel is simply not available).
+// - If the newly active tab is the ReviewRank tab, enable the panel for it.
+// - For all other tabs, disable the panel.
+// NOTE: chrome.sidePanel.open() is ONLY called from chrome.action.onClicked
+// (direct user gesture). tabs.onActivated only updates the enabled state.
 try {
   if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onActivated) {
     chrome.tabs.onActivated.addListener((activeInfo) => {
@@ -58,9 +60,11 @@ try {
         try {
           chrome.sidePanel.setOptions({ tabId: activeInfo.tabId, path: 'sidepanel/sidepanel.html', enabled: true });
         } catch (e) { /* best effort */ }
-        chrome.sidePanel.open({ tabId: activeInfo.tabId });
+      } else {
+        try {
+          chrome.sidePanel.setOptions({ tabId: activeInfo.tabId, enabled: false });
+        } catch (e) { /* best effort */ }
       }
-      // For non-associated tabs: do nothing. The panel is not available.
     });
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }

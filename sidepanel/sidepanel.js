@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', function() {
   var maxPriceInput = document.getElementById('maxPrice');
   var isAnalyzing = false;
   var BTN_LABEL_DEFAULT = 'Analyze This Page';
-  var LOADING_TEXT = 'Analyzing Amazon products...';
+  var LOADING_TEXT = 'Analyzing products...';
 
   // allProducts holds the RAW (unranked) union of products gathered so far
   // across the initial scrape and every load-more operation. The full pipeline
@@ -293,6 +293,21 @@ document.addEventListener('DOMContentLoaded', function() {
     return score;
   }
 
+  function getAdapterForUrl(url) {
+    try {
+      if (typeof window !== 'undefined' && window.ReviewRankAdapters && url) {
+        return window.ReviewRankAdapters.getAdapterForDomain(
+          (new URL(url)).hostname.toLowerCase()
+        );
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function getSiteName(adapter) {
+    return (adapter && adapter.name) ? adapter.name : 'this site';
+  }
+
     // Send a message to the content script of the active tab. When urlCheck is
   // true the active tab must be an Amazon search-results page (initial analyze).
   // When false we skip that check — load-more already validated the context.
@@ -306,17 +321,17 @@ document.addEventListener('DOMContentLoaded', function() {
       var tab = tabs[0];
       var url = tab.url || '';
 
-      if (urlCheck) {
-        if (url.indexOf('amazon.') === -1) {
-          callback({ success: false, error: 'Open an Amazon search-results page first.' });
-          return;
+        if (urlCheck) {
+          if (!adapter) {
+            callback({ success: false, error: 'Open a supported shopping site search-results page first.' });
+            return;
+          }
+          var isSearch = adapter.isSearchPage ? adapter.isSearchPage(url) : false;
+          if (!isSearch) {
+            callback({ success: false, error: 'Navigate to a ' + getSiteName(adapter) + ' search results page first.' });
+            return;
+          }
         }
-        var isSearchPage = url.indexOf('/s?') !== -1 || url.indexOf('/s/') !== -1 || url.indexOf('k=') !== -1;
-        if (!isSearchPage) {
-          callback({ success: false, error: 'Navigate to an Amazon search results page first.' });
-          return;
-        }
-      }
 
       chrome.tabs.sendMessage(tab.id, { action: action }, function(response) {
         if (chrome.runtime.lastError) {
@@ -408,14 +423,15 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
       var R = getRelevanceLib();
       if (R && R.extractSearchQueryFromUrl) {
-        var k = R.extractSearchQueryFromUrl(url);
+        var adapter = getAdapterForUrl(url);
+        var k = R.extractSearchQueryFromUrl(url, adapter);
         if (k) return k;
       }
     } catch (e) {}
     try {
-      var m = url.match(/[?&#]k=([^&#]*)/);
+      var m = url.match(/[?&#](k|q|search)=([^&#]*)/);
       if (!m) return '';
-      var raw = m[1].replace(/\+/g, ' ');
+      var raw = m[2].replace(/\+/g, ' ');
       try { raw = decodeURIComponent(raw); } catch (e2) { /* keep raw */ }
       return raw.trim();
     } catch (e) { return ''; }
@@ -827,7 +843,14 @@ document.addEventListener('DOMContentLoaded', function() {
     var trimmed = url.trim();
     if (!trimmed || trimmed === '#') return '';
     try {
-      var u = new URL(trimmed, originPageUrl || 'https://www.amazon.in/');
+      var base = originPageUrl || 'https://www.amazon.in/';
+      try {
+        var adapter = getAdapterForUrl(trimmed);
+        if (adapter && adapter.domains && adapter.domains[0]) {
+          base = 'https://www.' + adapter.domains[0] + '/';
+        }
+      } catch (e) {}
+      var u = new URL(trimmed, base);
       var keep = [];
       var seen = {};
       var params = u.search ? u.search.slice(1).split('&') : [];
