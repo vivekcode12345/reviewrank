@@ -19,6 +19,7 @@ try {
 // The panel is ONLY enabled/available for that tab; all other tabs have
 // no ReviewRank panel at all.
 var reviewRankTabId = null;
+var reviewRankPanelOpen = false;
 
 function isReviewRankTab(tabId) {
   return reviewRankTabId !== null && reviewRankTabId === tabId;
@@ -31,6 +32,7 @@ function markReviewRankTab(tabId) {
 function unmarkReviewRankTab(tabId) {
   if (reviewRankTabId === tabId) {
     reviewRankTabId = null;
+    reviewRankPanelOpen = false;
   }
 }
 
@@ -40,6 +42,7 @@ try {
   if (typeof chrome !== 'undefined' && chrome.action && chrome.action.onClicked && chrome.sidePanel && chrome.sidePanel.open) {
     chrome.action.onClicked.addListener((tab) => {
       markReviewRankTab(tab.id);
+      reviewRankPanelOpen = true;
       chrome.sidePanel.open({ tabId: tab.id });
       try {
         chrome.sidePanel.setOptions({ tabId: tab.id, path: 'sidepanel/sidepanel.html', enabled: true });
@@ -57,10 +60,12 @@ try {
   if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onActivated) {
     chrome.tabs.onActivated.addListener((activeInfo) => {
       if (isReviewRankTab(activeInfo.tabId)) {
+        reviewRankPanelOpen = true;
         try {
           chrome.sidePanel.setOptions({ tabId: activeInfo.tabId, path: 'sidepanel/sidepanel.html', enabled: true });
         } catch (e) { /* best effort */ }
       } else {
+        reviewRankPanelOpen = false;
         try {
           chrome.sidePanel.setOptions({ tabId: activeInfo.tabId, enabled: false });
         } catch (e) { /* best effort */ }
@@ -175,6 +180,11 @@ try {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message && message.action === 'analyzeNextPageBg') {
         openNextPageInTempTab(message, sendResponse);
+        return true;
+      }
+      if (message && message.action === 'isReviewRankPanelOpen') {
+        var open = reviewRankPanelOpen && message.tabId === reviewRankTabId;
+        sendResponse({ open: open });
         return true;
       }
     });

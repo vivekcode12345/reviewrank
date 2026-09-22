@@ -1003,9 +1003,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             var tabId = (tabs && tabs[0]) ? tabs[0].id : null;
             if (tabId !== null) {
-              chrome.sidePanel.close({ tabId: tabId }).catch(function() {
-                // Ignore "No active tab-specific side panel" errors;
-                // the panel may already be closed or not tab-specific.
+              chrome.runtime.sendMessage({ action: 'isReviewRankPanelOpen', tabId: tabId }, function(response) {
+                if (response && response.open) {
+                  chrome.sidePanel.close({ tabId: tabId }).catch(function() {
+                    // Ignore close errors if the panel is already closed.
+                  });
+                }
               });
             }
           });
