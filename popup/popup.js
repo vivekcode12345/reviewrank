@@ -320,18 +320,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
       var tab = tabs[0];
       var url = tab.url || '';
+      var adapter = getAdapterForUrl(url);
 
-        if (urlCheck) {
-          if (!adapter) {
-            callback({ success: false, error: 'Open a supported shopping site search-results page first.' });
-            return;
-          }
-          var isSearch = adapter.isSearchPage ? adapter.isSearchPage(url) : false;
-          if (!isSearch) {
-            callback({ success: false, error: 'Navigate to a ' + getSiteName(adapter) + ' search results page first.' });
-            return;
-          }
+      if (urlCheck) {
+        if (!adapter) {
+          callback({ success: false, error: 'Open a supported shopping site search-results page first.' });
+          return;
         }
+        var isSearch = adapter.isSearchPage ? adapter.isSearchPage(url) : false;
+        if (!isSearch) {
+          callback({ success: false, error: 'Navigate to a ' + getSiteName(adapter) + ' search results page first.' });
+          return;
+        }
+      }
 
       chrome.tabs.sendMessage(tab.id, { action: action }, function(response) {
         if (chrome.runtime.lastError) {

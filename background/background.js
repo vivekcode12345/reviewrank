@@ -40,10 +40,10 @@ try {
   if (typeof chrome !== 'undefined' && chrome.action && chrome.action.onClicked && chrome.sidePanel && chrome.sidePanel.open) {
     chrome.action.onClicked.addListener((tab) => {
       markReviewRankTab(tab.id);
+      chrome.sidePanel.open({ tabId: tab.id });
       try {
         chrome.sidePanel.setOptions({ tabId: tab.id, path: 'sidepanel/sidepanel.html', enabled: true });
       } catch (e) { /* best effort */ }
-      chrome.sidePanel.open({ tabId: tab.id });
     });
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }
