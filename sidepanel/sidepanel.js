@@ -27,7 +27,7 @@ document.addEventListener('DOMContentLoaded', function() {
   var currentBudget = { min: null, max: null };
   var lastRanked = [];
   // --- Category relevance (#8) state ---
-  // currentSearchQuery is the raw Amazon search query for this analysis
+  // currentSearchQuery is the raw search query for this analysis
   // (from the content script's search input, falling back to the tab URL).
   // relevanceActive = filtering ran on the current result set;
   // relevanceAvailable = a usable query was found (else ranking is unchanged).
@@ -112,7 +112,7 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // Resolve the Amazon search query (content input wins, tab URL fallback).
+      // Resolve the search query (content input wins, tab URL fallback).
       // Relevance filtering runs inside processProducts BEFORE review-count sort.
       currentSearchQuery = resolveSearchQuery(
         fullResponse && fullResponse.searchQuery,
@@ -304,14 +304,23 @@ document.addEventListener('DOMContentLoaded', function() {
     return null;
   }
 
+  function getSiteRefreshErrorMessage(url) {
+    var adapter = getAdapterForUrl(url);
+    var siteName = adapter ? adapter.name : '';
+    if (siteName) {
+      return 'Could not analyze this page. Please refresh the ' + siteName + ' page and try again.';
+    }
+    return 'Could not analyze this page. Please refresh and try again.';
+  }
+
   function getSiteName(adapter) {
     return (adapter && adapter.name) ? adapter.name : 'this site';
   }
 
     // Send a message to the content script of the active tab. When urlCheck is
-  // true the active tab must be an Amazon search-results page (initial analyze).
-  // When false we skip that check — load-more already validated the context.
-  function sendTabMessage(action, urlCheck, callback) {
+    // true the active tab must be a supported shopping search-results page (initial analyze).
+    // When false we skip that check — load-more already validated the context.
+    function sendTabMessage(action, urlCheck, callback) {
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
       if (!tabs || !tabs[0]) {
         callback({ success: false, error: 'Cannot access the current tab. Please try again.' });
@@ -342,22 +351,21 @@ document.addEventListener('DOMContentLoaded', function() {
             files: ['content/content.js']
           }, function() {
             if (chrome.runtime.lastError) {
-              callback({ success: false, error: 'Could not analyze this page. Please refresh the Amazon page and try again.' });
+              callback({ success: false, error: getSiteRefreshErrorMessage(url) });
               return;
             }
-            setTimeout(function() {
-              chrome.tabs.sendMessage(tab.id, { action: action }, function(r2) {
-                if (chrome.runtime.lastError) {
-                  callback({ success: false, error: 'Could not analyze this page. Please refresh and try again.' });
-                } else {
-                  callback(r2 || { success: false, error: 'Could not analyze this page. Please refresh the Amazon page and try again.' });
-                }
-              });
-            }, 500);
+             setTimeout(function() {
+               chrome.tabs.sendMessage(tab.id, { action: action }, function(r2) {
+                 if (chrome.runtime.lastError) {
+                   callback({ success: false, error: getSiteRefreshErrorMessage(url) });
+                 } else {
+                   callback(r2 || { success: false, error: getSiteRefreshErrorMessage(url) });
+                 }
+               });
+             }, 500);
           });
-          return;
         }
-        callback(response || { success: false, error: 'Could not analyze this page. Please refresh the Amazon page and try again.' });
+        callback(response || { success: false, error: getSiteRefreshErrorMessage(url) });
       });
     });
   }
@@ -368,7 +376,7 @@ document.addEventListener('DOMContentLoaded', function() {
     getActiveTabUrl(function(tabUrl) {
       sendTabMessage('scrapeAmazon', true, function(response) {
         if (!response || !response.success) {
-          callback(response ? response.error : 'Could not analyze this page. Please refresh the Amazon page and try again.');
+          callback(response ? response.error : getSiteRefreshErrorMessage(tabUrl));
           return;
         }
         if (response && !response.pageUrl && tabUrl) response.pageUrl = tabUrl;
@@ -819,7 +827,7 @@ document.addEventListener('DOMContentLoaded', function() {
     paginationMsg.textContent = msg || '';
   }
 
-  // Volatile Amazon tracking params (popup-local mirror of the content-script
+  // Volatile tracking params (popup-local mirror of the content-script
   // rule): ref-family, pd_*/pf_* noise, pldn_*, psc, srs, spIA, qid, sr,
   // session/slot ids never identify a page and are stripped for loops.
   function isVolatilePageParamLocal(name) {
@@ -844,13 +852,14 @@ document.addEventListener('DOMContentLoaded', function() {
     var trimmed = url.trim();
     if (!trimmed || trimmed === '#') return '';
     try {
-      var base = originPageUrl || 'https://www.amazon.in/';
+      var base = originPageUrl || '';
       try {
         var adapter = getAdapterForUrl(trimmed);
         if (adapter && adapter.domains && adapter.domains[0]) {
           base = 'https://www.' + adapter.domains[0] + '/';
         }
       } catch (e) {}
+      if (!base) base = 'https://www.amazon.in/';
       var u = new URL(trimmed, base);
       var keep = [];
       var seen = {};
@@ -882,7 +891,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // "Analyze Next Page": orchestrated by the background worker, which opens
-  // the next Amazon search-results page in a temporary INACTIVE tab, loads
+  // the next search-results page in a temporary INACTIVE tab, loads
   // the REAL page, extracts via the content script, then closes the temp
   // tab. The user's active tab never navigates. No fetch()/DOMParser.
   //
@@ -996,23 +1005,15 @@ document.addEventListener('DOMContentLoaded', function() {
   if (closeSidePanelBtn) {
     closeSidePanelBtn.addEventListener('click', function() {
       try {
-        if (chrome.sidePanel && chrome.sidePanel.close) {
-          chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-            if (chrome.runtime.lastError) {
-              return;
-            }
-            var tabId = (tabs && tabs[0]) ? tabs[0].id : null;
-            if (tabId !== null) {
-              chrome.runtime.sendMessage({ action: 'isReviewRankPanelOpen', tabId: tabId }, function(response) {
-                if (response && response.open) {
-                  chrome.sidePanel.close({ tabId: tabId }).catch(function() {
-                    // Ignore close errors if the panel is already closed.
-                  });
-                }
-              });
-            }
-          });
-        }
+        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+          if (chrome.runtime.lastError) {
+            return;
+          }
+          var tabId = (tabs && tabs[0]) ? tabs[0].id : null;
+          if (tabId !== null) {
+            chrome.runtime.sendMessage({ action: 'requestClosePanel', tabId: tabId });
+          }
+        });
       } catch (e) { /* best effort */ }
     });
   }

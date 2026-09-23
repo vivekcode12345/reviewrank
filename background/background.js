@@ -7,6 +7,8 @@
 // NO fetch()/DOMParser scraping of Amazon HTML is used anywhere — products
 // always come from a real loaded page document.
 
+try { importScripts('../lib/site-adapters.js'); } catch (e) { /* non-browser */ }
+
 try {
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onInstalled) {
     chrome.runtime.onInstalled.addListener(() => {
@@ -15,61 +17,85 @@ try {
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }
 
-// Track the tab where ReviewRank Side Panel was explicitly opened.
-// The panel is ONLY enabled/available for that tab; all other tabs have
-// no ReviewRank panel at all.
-var reviewRankTabId = null;
-var reviewRankPanelOpen = false;
+// Track the tabs where the user explicitly opened the ReviewRank Side Panel.
+// The panel is ONLY enabled/available for those tabs on supported sites.
+var reviewRankOpenTabs = {};
 
-function isReviewRankTab(tabId) {
-  return reviewRankTabId !== null && reviewRankTabId === tabId;
+function isReviewRankOpenTab(tabId) {
+  return !!reviewRankOpenTabs[tabId];
 }
 
 function markReviewRankTab(tabId) {
-  reviewRankTabId = tabId;
+  reviewRankOpenTabs[tabId] = true;
 }
 
 function unmarkReviewRankTab(tabId) {
-  if (reviewRankTabId === tabId) {
-    reviewRankTabId = null;
-    reviewRankPanelOpen = false;
+  delete reviewRankOpenTabs[tabId];
+}
+
+function isSupportedReviewRankUrl(url) {
+  if (!url) return false;
+  try {
+    var host = (new URL(url)).hostname.toLowerCase();
+    var adapters = (typeof self !== 'undefined' && self.ReviewRankAdapters) ? self.ReviewRankAdapters : null;
+    if (!adapters) return false;
+    var adapter = adapters.getAdapterForDomain(host);
+    return !!adapter;
+  } catch (e) { return false; }
+}
+
+function updatePanelForTab(tabId, url) {
+  try {
+    var enabled = !!(url && isSupportedReviewRankUrl(url) && isReviewRankOpenTab(tabId));
+    if (enabled) {
+      chrome.sidePanel.setOptions({ tabId: tabId, path: 'sidepanel/sidepanel.html', enabled: true });
+    } else {
+      chrome.sidePanel.setOptions({ tabId: tabId, enabled: false });
+    }
+  } catch (e) {
+    try { chrome.sidePanel.setOptions({ tabId: tabId, enabled: false }); } catch (e2) {}
   }
 }
 
 // Open Side Panel when the extension icon is clicked.
-// The panel is associated with the specific tab only.
+// Only opens on supported shopping/search-results tabs.
 try {
   if (typeof chrome !== 'undefined' && chrome.action && chrome.action.onClicked && chrome.sidePanel && chrome.sidePanel.open) {
     chrome.action.onClicked.addListener((tab) => {
+      if (!tab || tab.id === undefined) return;
+      var url = tab.url || '';
+      if (!isSupportedReviewRankUrl(url)) return;
       markReviewRankTab(tab.id);
-      reviewRankPanelOpen = true;
+      chrome.sidePanel.setOptions({ tabId: tab.id, path: 'sidepanel/sidepanel.html', enabled: true });
       chrome.sidePanel.open({ tabId: tab.id });
-      try {
-        chrome.sidePanel.setOptions({ tabId: tab.id, path: 'sidepanel/sidepanel.html', enabled: true });
-      } catch (e) { /* best effort */ }
     });
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }
 
-// When the user switches tabs:
-// - If the newly active tab is the ReviewRank tab, enable the panel for it.
-// - For all other tabs, disable the panel.
+// When the user switches tabs: enable/disable the panel based on whether
+// the activated tab is a supported site where the panel was previously opened.
 // NOTE: chrome.sidePanel.open() is ONLY called from chrome.action.onClicked
 // (direct user gesture). tabs.onActivated only updates the enabled state.
 try {
   if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onActivated) {
     chrome.tabs.onActivated.addListener((activeInfo) => {
-      if (isReviewRankTab(activeInfo.tabId)) {
-        reviewRankPanelOpen = true;
-        try {
-          chrome.sidePanel.setOptions({ tabId: activeInfo.tabId, path: 'sidepanel/sidepanel.html', enabled: true });
-        } catch (e) { /* best effort */ }
-      } else {
-        reviewRankPanelOpen = false;
-        try {
-          chrome.sidePanel.setOptions({ tabId: activeInfo.tabId, enabled: false });
-        } catch (e) { /* best effort */ }
-      }
+      var tabId = activeInfo.tabId;
+      chrome.tabs.get(tabId, function(tab) {
+        if (chrome.runtime.lastError || !tab) return;
+        updatePanelForTab(tabId, tab.url || '');
+      });
+    });
+  }
+} catch (e) { /* non-Chrome runtimes (unit tests) */ }
+
+// When a tab navigates to a different URL, update the panel state.
+try {
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onUpdated) {
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+      if (!isReviewRankOpenTab(tabId)) return;
+      if (!tab || !tab.url) return;
+      if (!changeInfo.url && changeInfo.status !== 'complete') return;
+      updatePanelForTab(tabId, tab.url);
     });
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }
@@ -79,6 +105,27 @@ try {
   if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onRemoved) {
     chrome.tabs.onRemoved.addListener((tabId) => {
       unmarkReviewRankTab(tabId);
+    });
+  }
+} catch (e) { /* non-Chrome runtimes (unit tests) */ }
+
+// Best-effort: keep state in sync with actual panel open/close events.
+try {
+  if (typeof chrome !== 'undefined' && chrome.sidePanel && chrome.sidePanel.onOpened) {
+    chrome.sidePanel.onOpened.addListener((details) => {
+      if (details.tabId !== undefined) {
+        markReviewRankTab(details.tabId);
+      }
+    });
+  }
+} catch (e) { /* non-Chrome runtimes (unit tests) */ }
+
+try {
+  if (typeof chrome !== 'undefined' && chrome.sidePanel && chrome.sidePanel.onClosed) {
+    chrome.sidePanel.onClosed.addListener((details) => {
+      if (details.tabId !== undefined) {
+        unmarkReviewRankTab(details.tabId);
+      }
     });
   }
 } catch (e) { /* non-Chrome runtimes (unit tests) */ }
@@ -183,8 +230,16 @@ try {
         return true;
       }
       if (message && message.action === 'isReviewRankPanelOpen') {
-        var open = reviewRankPanelOpen && message.tabId === reviewRankTabId;
+        var open = isReviewRankOpenTab(message.tabId);
         sendResponse({ open: open });
+        return true;
+      }
+      if (message && message.action === 'requestClosePanel') {
+        if (isReviewRankOpenTab(message.tabId)) {
+          unmarkReviewRankTab(message.tabId);
+          chrome.sidePanel.close({ tabId: message.tabId }).catch(function() {});
+        }
+        sendResponse({ closed: true });
         return true;
       }
     });

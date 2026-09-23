@@ -90,10 +90,21 @@ assert(html.indexOf('4.1 average rating') !== -1, 'card: "4.1 average rating" re
 assert(html.indexOf('<img src="https://m.media-amazon.com/images/I/51A.jpg"') !== -1, 'card: image tag with product image URL');
 assert(html.indexOf('alt="boAt Rockerz 450 Bluetooth Headphones"') !== -1, 'card: image alt = product title');
 
-// View on Amazon uses the product's own URL, opens new tab
-assert(html.indexOf('View on Amazon') !== -1, 'card: "View on Amazon" button present');
+// View on {site} uses the product's own URL, opens new tab
+assert(html.indexOf('View on Amazon') !== -1, 'card: "View on Amazon" button present for Amazon product');
 assert(html.indexOf('href="https://www.amazon.in/dp/B0ABC123DE"') !== -1, 'card: link uses product URL (not fake URL)');
 assert(html.indexOf('target="_blank"') !== -1, 'card: link opens in new tab');
+
+// Multi-site button text
+assert(UI.buildProductCardHTML({ title: 'T', url: 'https://www.flipkart.com/p/itm123', source: 'Flipkart' }, 1).indexOf('View on Flipkart') !== -1,
+  'card: Flipkart product shows "View on Flipkart"');
+assert(UI.buildProductCardHTML({ title: 'T', url: 'https://www.meesho.com/p/abc', source: 'Meesho' }, 1).indexOf('View on Meesho') !== -1,
+  'card: Meesho product shows "View on Meesho"');
+assert(UI.buildProductCardHTML({ title: 'T', url: 'https://www.myntra.com/p/xyz', source: 'Myntra' }, 1).indexOf('View on Myntra') !== -1,
+  'card: Myntra product shows "View on Myntra"');
+// Missing source falls back to Amazon
+assert(UI.buildProductCardHTML({ title: 'T', url: 'https://www.amazon.in/dp/B0ABC123DE' }, 1).indexOf('View on Amazon') !== -1,
+  'card: missing source falls back to "View on Amazon"');
 
 // Rank numbering contiguous across a list
 var ranksOk = true;
@@ -136,18 +147,21 @@ assert(noImage.indexOf('product-image-empty') !== -1, 'missing image: placeholde
 
 var noUrl = UI.buildProductCardHTML({ title: 'T', price: 100, rating: 4, reviewCount: 100 }, 1);
 assert(noUrl.indexOf('View on Amazon') === -1, 'missing URL: no fake/empty Amazon link rendered');
+assert(noUrl.indexOf('View on Flipkart') === -1, 'missing URL: no fake/empty Flipkart link rendered');
+assert(noUrl.indexOf('View on Meesho') === -1, 'missing URL: no fake/empty Meesho link rendered');
+assert(noUrl.indexOf('View on Myntra') === -1, 'missing URL: no fake/empty Myntra link rendered');
 
 // ---------------------------------------------------------------------------
 // Empty states + error sanitization
 // ---------------------------------------------------------------------------
 console.log('--- EMPTY STATES / ERROR SANITIZATION ---');
-eq(UI.MESSAGES.noProducts, 'No Amazon products found on this page.', 'empty: no products message');
+eq(UI.MESSAGES.noProducts, 'No products found on this page.', 'empty: no products message');
 eq(UI.MESSAGES.budgetNoMatch, 'No products found within your budget.', 'empty: budget no-match message');
 eq(UI.MESSAGES.allSponsored, 'No non-sponsored products found.', 'empty: all-sponsored message');
 
 eq(UI.friendlyErrorMessage('Cannot read properties of undefined (reading "x")'), UI.MESSAGES.genericError,
   'sanitize: raw JS TypeError replaced with generic message');
-eq(UI.friendlyErrorMessage('No Amazon products found on this page.'), 'No Amazon products found on this page.',
+eq(UI.friendlyErrorMessage('No products found on this page.'), 'No products found on this page.',
   'sanitize: known message passes through');
 eq(UI.friendlyErrorMessage(undefined), UI.MESSAGES.genericError, 'sanitize: undefined error -> generic message');
 eq(UI.friendlyErrorMessage({ code: -32000 }), UI.MESSAGES.genericError, 'sanitize: non-string error -> generic message');

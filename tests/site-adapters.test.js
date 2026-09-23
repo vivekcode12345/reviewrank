@@ -610,6 +610,55 @@ var msReview2 = msCard({}, [
 ]);
 assertEqual(meesho.parseProduct(msReview2).reviewCount, 1234, 'Meesho review count in parens');
 
+// ---- Review count: false-positive prevention (#10) ----
+// Bug: a card with "1,299 Ratings" and an unrelated "81,299" elsewhere
+// was extracting 81,299 instead of 1,299.
+var msReviewFalsePositive = msCard({}, [
+  msLink('/p/fp/p/fp', 'False Positive Product'),
+  msSpan('PriceTag__PriceText', '₹81,299'),
+  msSpan('RatingAndReview__AverageRating', '3.8'),
+  msSpan('RatingAndReview__RatingCount', '1,299 Ratings'),
+  msSpan('RatingAndReview__ReviewCount', '493 Reviews'),
+  msSpan('', '81299')
+]);
+assertEqual(meesho.parseProduct(msReviewFalsePositive).reviewCount, 1299, 'Meesho: 81,299 ignored, 1,299 Ratings extracted');
+
+// Unrelated bare number in a span with no rating/review context is never matched
+var msReviewNoBareNumber = msCard({}, [
+  msLink('/p/bn/p/bn', 'Bare Number Product'),
+  msSpan('PriceTag__PriceText', '₹81,299'),
+  msSpan('RatingAndReview__RatingCount', '1,299 Ratings'),
+  msSpan('', '81299')
+]);
+assertEqual(meesho.parseProduct(msReviewNoBareNumber).reviewCount, 1299, 'Meesho: bare 81,299 span ignored when rating count present');
+
+// No rating count element → bare numbers are not extracted
+var msReviewNoCount = msCard({}, [
+  msLink('/p/nc/p/nc', 'No Count Product'),
+  msSpan('', '81,299')
+]);
+assertEqual(meesho.parseProduct(msReviewNoCount).reviewCount, null, 'Meesho: bare number with no rating context -> null');
+
+// ---- K / L suffix support ----
+var msReviewK = msCard({}, [
+  msLink('/p/k/p/k', 'K Suffix Product'),
+  msSpan('RatingAndReview__RatingCount', '12.4K Ratings')
+]);
+assertEqual(meesho.parseProduct(msReviewK).reviewCount, 12400, 'Meesho: 12.4K Ratings -> 12400');
+
+var msReviewL = msCard({}, [
+  msLink('/p/l/p/l', 'L Suffix Product'),
+  msSpan('RatingAndReview__RatingCount', '1.2L Ratings')
+]);
+assertEqual(meesho.parseProduct(msReviewL).reviewCount, 120000, 'Meesho: 1.2L Ratings -> 120000');
+
+// No comma format
+var msReviewNoComma = msCard({}, [
+  msLink('/p/nc/p/nc2', 'No Comma Product'),
+  msSpan('RatingAndReview__RatingCount', '1299 Ratings')
+]);
+assertEqual(meesho.parseProduct(msReviewNoComma).reviewCount, 1299, 'Meesho: 1299 Ratings (no comma) -> 1299');
+
 // ---- Sponsored detection ----
 
 var msSponsored = msCard({}, [
