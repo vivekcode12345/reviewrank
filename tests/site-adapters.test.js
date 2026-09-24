@@ -552,7 +552,8 @@ assert(msParsed !== null, 'full Meesho card -> parsed product');
 assertEqual(msParsed.title, 'Meesho Wireless Earbuds', 'Meesho title extracted');
 assertEqual(msParsed.price, 1499, 'Meesho price parsed');
 assertEqual(msParsed.rating, 4.3, 'Meesho rating parsed');
-assertEqual(msParsed.reviewCount, 12345, 'Meesho reviewCount parsed');
+assertEqual(msParsed.ratingCount, 12345, 'Meesho ratingCount parsed');
+assertEqual(msParsed.reviewCount, null, 'Meesho reviewCount is null (no Reviews text)');
 assertEqual(msParsed.productId, 'ABC123', 'Meesho productId from URL');
 assertEqual(msParsed.source, 'Meesho', 'Meesho source');
 assertEqual(msParsed.sponsored, false, 'Meesho non-sponsored defaults to false');
@@ -560,7 +561,7 @@ assert(msParsed.url.indexOf('/p/') !== -1 || msParsed.url.indexOf('meesho') !== 
 
 // Verify normalized fields exist
 var msRequiredFields = [
-  'title', 'price', 'rating', 'reviewCount', 'image', 'url',
+  'title', 'price', 'rating', 'ratingCount', 'reviewCount', 'image', 'url',
   'productId', 'sponsored', 'source'
 ];
 for (var mf = 0; mf < msRequiredFields.length; mf++) {
@@ -596,19 +597,21 @@ var msRating2 = msCard({}, [
 ]);
 assertEqual(meesho.parseProduct(msRating2).rating, 3.9, 'Meesho alternate rating class');
 
-// ---- Review count variations ----
+// ---- Rating vs review count separation ----
 
 var msReview1 = msCard({}, [
   msLink('/p/rv1/p/rv1', 'Reviewed Product'),
   msSpan('RatingAndReview__RatingCount', '5,678 Ratings')
 ]);
-assertEqual(meesho.parseProduct(msReview1).reviewCount, 5678, 'Meesho review count with Ratings');
+assertEqual(meesho.parseProduct(msReview1).ratingCount, 5678, 'Meesho ratingCount with Ratings');
+assertEqual(meesho.parseProduct(msReview1).reviewCount, null, 'Meesho reviewCount null (Ratings text → ratingCount)');
 
 var msReview2 = msCard({}, [
   msLink('/p/rv2/p/rv2', 'Reviewed Product 2'),
   msSpan('RatingAndReview__RatingCount', '(1,234)')
 ]);
-assertEqual(meesho.parseProduct(msReview2).reviewCount, 1234, 'Meesho review count in parens');
+assertEqual(meesho.parseProduct(msReview2).ratingCount, 1234, 'Meesho ratingCount in parens');
+assertEqual(meesho.parseProduct(msReview2).reviewCount, null, 'Meesho reviewCount null (parens → ratingCount)');
 
 // ---- Review count: false-positive prevention (#10) ----
 // Bug: a card with "1,299 Ratings" and an unrelated "81,299" elsewhere
@@ -621,7 +624,8 @@ var msReviewFalsePositive = msCard({}, [
   msSpan('RatingAndReview__ReviewCount', '493 Reviews'),
   msSpan('', '81299')
 ]);
-assertEqual(meesho.parseProduct(msReviewFalsePositive).reviewCount, 1299, 'Meesho: 81,299 ignored, 1,299 Ratings extracted');
+assertEqual(meesho.parseProduct(msReviewFalsePositive).ratingCount, 1299, 'Meesho: 81,299 ignored, 1,299 Ratings → ratingCount');
+assertEqual(meesho.parseProduct(msReviewFalsePositive).reviewCount, 493, 'Meesho: 493 Reviews → reviewCount');
 
 // Unrelated bare number in a span with no rating/review context is never matched
 var msReviewNoBareNumber = msCard({}, [
@@ -630,34 +634,39 @@ var msReviewNoBareNumber = msCard({}, [
   msSpan('RatingAndReview__RatingCount', '1,299 Ratings'),
   msSpan('', '81299')
 ]);
-assertEqual(meesho.parseProduct(msReviewNoBareNumber).reviewCount, 1299, 'Meesho: bare 81,299 span ignored when rating count present');
+assertEqual(meesho.parseProduct(msReviewNoBareNumber).ratingCount, 1299, 'Meesho: bare 81,299 span ignored, 1,299 Ratings → ratingCount');
+assertEqual(meesho.parseProduct(msReviewNoBareNumber).reviewCount, null, 'Meeso: no Reviews text → reviewCount null');
 
-// No rating count element → bare numbers are not extracted
+// No rating count element → bare numbers are not extracted as rating count
 var msReviewNoCount = msCard({}, [
   msLink('/p/nc/p/nc', 'No Count Product'),
   msSpan('', '81,299')
 ]);
-assertEqual(meesho.parseProduct(msReviewNoCount).reviewCount, null, 'Meesho: bare number with no rating context -> null');
+assertEqual(meesho.parseProduct(msReviewNoCount).ratingCount, null, 'Meesho: bare number with no rating context → ratingCount null');
+assertEqual(meesho.parseProduct(msReviewNoCount).reviewCount, null, 'Meesho: bare number with no review context → reviewCount null');
 
 // ---- K / L suffix support ----
 var msReviewK = msCard({}, [
   msLink('/p/k/p/k', 'K Suffix Product'),
   msSpan('RatingAndReview__RatingCount', '12.4K Ratings')
 ]);
-assertEqual(meesho.parseProduct(msReviewK).reviewCount, 12400, 'Meesho: 12.4K Ratings -> 12400');
+assertEqual(meesho.parseProduct(msReviewK).ratingCount, 12400, 'Meesho: 12.4K Ratings → ratingCount 12400');
+assertEqual(meesho.parseProduct(msReviewK).reviewCount, null, 'Meesho: no Reviews text → reviewCount null');
 
 var msReviewL = msCard({}, [
   msLink('/p/l/p/l', 'L Suffix Product'),
   msSpan('RatingAndReview__RatingCount', '1.2L Ratings')
 ]);
-assertEqual(meesho.parseProduct(msReviewL).reviewCount, 120000, 'Meesho: 1.2L Ratings -> 120000');
+assertEqual(meesho.parseProduct(msReviewL).ratingCount, 120000, 'Meesho: 1.2L Ratings → ratingCount 120000');
+assertEqual(meesho.parseProduct(msReviewL).reviewCount, null, 'Meesho: no Reviews text → reviewCount null');
 
 // No comma format
 var msReviewNoComma = msCard({}, [
   msLink('/p/nc/p/nc2', 'No Comma Product'),
   msSpan('RatingAndReview__RatingCount', '1299 Ratings')
 ]);
-assertEqual(meesho.parseProduct(msReviewNoComma).reviewCount, 1299, 'Meesho: 1299 Ratings (no comma) -> 1299');
+assertEqual(meesho.parseProduct(msReviewNoComma).ratingCount, 1299, 'Meesho: 1299 Ratings (no comma) → ratingCount 1299');
+assertEqual(meesho.parseProduct(msReviewNoComma).reviewCount, null, 'Meesho: no Reviews text → reviewCount null');
 
 // ---- Sponsored detection ----
 

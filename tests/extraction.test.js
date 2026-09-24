@@ -392,7 +392,7 @@ eq(parsed.title, 'boAt Rockerz 450 Bluetooth Earphones', 'integration: title ext
 eq(parsed.asin, 'B0ABC123DE', 'integration: ASIN extracted + uppercased');
 eq(parsed.price, 1099, 'integration: price ₹1,099 -> 1099');
 eq(parsed.rating, 4.5, 'integration: rating 4.5');
-eq(parsed.reviewCount, 92431, 'integration: reviewCount 92,431');
+  eq(parsed.ratingCount, 92431, 'integration: ratingCount 92,431');
 eq(parsed.imageUrl, 'https://m.media-amazon.com/images/I/51A.jpg', 'integration: image URL');
 eq(parsed.canonicalUrl, 'https://www.amazon.in/dp/B0ABC123DE', 'integration: canonical URL');
 eq(parsed.marketplace, 'Amazon', 'integration: marketplace = Amazon');
@@ -405,7 +405,7 @@ var bareCard = el('div', { 'data-asin': 'B0ZZZZZZZZ' }, [
 var bareParsed = X.parseAmazonProduct(bareCard);
 eq(bareParsed.price, null, 'missing: price is null (not invented)');
 eq(bareParsed.rating, null, 'missing: rating is null (missing is distinct from a real 0-star)');
-eq(bareParsed.reviewCount, null, 'missing: reviewCount is null (not invented)');
+  eq(bareParsed.ratingCount, null, 'missing: ratingCount is null (not invented)');
 
 // ranking behavior: product without reviewCount sorts LAST (via popup logic)
 function sortByReviewCount(products) {
@@ -433,8 +433,8 @@ var orderChecked = sortByReviewCount([
     el('span', {}, '700+ bought in past month')
   ]);
   var kratosParsed = X.parseAmazonProduct(kratosCard);
-  eq(kratosParsed.reviewCount, 2600, 'regression: "2.6K ratings" → 2600');
-  assert(kratosParsed.reviewCount !== 700, 'regression: "700+ bought" NOT used as review count');
+  eq(kratosParsed.ratingCount, 2600, 'regression: "2.6K ratings" → 2600');
+  assert(kratosParsed.ratingCount !== 700, 'regression: "700+ bought" NOT used as rating count');
   eq(kratosParsed.price, 499, 'regression: price ₹499 → 499');
 
   // Test E: "700+ bought in past month" text itself is NOT a review count

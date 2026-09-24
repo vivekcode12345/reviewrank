@@ -35,13 +35,13 @@ eq(UI.formatPriceText({ price: 1099 }), '₹1,099', 'priceText: from product obj
 eq(UI.formatPriceText({ price: null }), null, 'priceText: missing price -> null (field hidden/muted)');
 
 // ---------------------------------------------------------------------------
-// Review count + rating display (exact counts, correct terminology)
+// Review count + rating display (exact counts, neutral wording)
 // ---------------------------------------------------------------------------
 console.log('--- RATING COUNT FORMATTING ---');
-eq(UI.formatRatingCountText({ reviewCount: 24532 }), '24,532 customer ratings', 'count: 24532 -> "24,532 customer ratings"');
-eq(UI.formatRatingCountText({ reviewCount: 92431 }), '92,431 customer ratings', 'count: 92431 exact (no 92.4K abbreviation)');
-eq(UI.formatRatingCountText({ reviewCount: 1200 }), '1,200 customer ratings', 'count: 1200 -> "1,200"');
-eq(UI.formatRatingCountText({ reviewCount: 12400 }), '12,400 customer ratings', 'count: 12400 -> "12,400"');
+eq(UI.formatRatingCountText({ reviewCount: 24532 }), '24,532 customer feedback', 'count: 24532 -> "24,532 customer feedback"');
+eq(UI.formatRatingCountText({ reviewCount: 92431 }), '92,431 customer feedback', 'count: 92431 exact (no 92.4K abbreviation)');
+eq(UI.formatRatingCountText({ reviewCount: 1200 }), '1,200 customer feedback', 'count: 1200 -> "1,200"');
+eq(UI.formatRatingCountText({ reviewCount: 12400 }), '12,400 customer feedback', 'count: 12400 -> "12,400"');
 eq(UI.formatRatingCountText({ reviewCount: 1234, countType: 'reviews' }), '1,234 customer reviews', 'count: written-reviews wording adapts');
 eq(UI.formatRatingCountText({ reviewCount: 0 }), null, 'count: 0 -> null (never "0 ratings")');
 eq(UI.formatRatingCountText({ reviewCount: null }), null, 'count: null -> null (never "null")');
@@ -81,7 +81,7 @@ assert(html.indexOf('boAt Rockerz 450 Bluetooth Headphones') !== -1, 'card: prod
 assert(html.indexOf('₹1,299') !== -1, 'card: price ₹1,299 rendered');
 
 // Review count (prominent, correct wording, exact)
-assert(html.indexOf('24,532 customer ratings') !== -1, 'card: "24,532 customer ratings" rendered');
+assert(html.indexOf('24,532 customer feedback') !== -1, 'card: "24,532 customer feedback" rendered');
 
 // Average rating (secondary)
 assert(html.indexOf('4.1 average rating') !== -1, 'card: "4.1 average rating" rendered');

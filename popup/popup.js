@@ -207,13 +207,19 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   function sortByReviewCount(products) {
+    var V = window.ReviewRankValidation;
     var copy = products.slice();
     copy.sort(function(a, b) {
-      // Review-count DESC. A null reviewCount is treated as "-1" so a
-      // product with a null count can NEVER outrank any valid count
-      // (including 0) and always lands at the bottom of the ranking.
-      var aCount = (typeof a.reviewCount === 'number' && isFinite(a.reviewCount)) ? a.reviewCount : -1;
-      var bCount = (typeof b.reviewCount === 'number' && isFinite(b.reviewCount)) ? b.reviewCount : -1;
+      // Feedback volume DESC: reviewCount first, then ratingCount, then null.
+      // A null feedback volume is treated as "-1" so a product without any
+      // feedback volume can NEVER outrank a product with valid feedback volume
+      // (including 0) and always lands at the bottom.
+      var aVol = (V && typeof V.getFeedbackVolume === 'function')
+        ? V.getFeedbackVolume(a) : null;
+      var bVol = (V && typeof V.getFeedbackVolume === 'function')
+        ? V.getFeedbackVolume(b) : null;
+      var aCount = (typeof aVol === 'number' && isFinite(aVol)) ? aVol : -1;
+      var bCount = (typeof bVol === 'number' && isFinite(bVol)) ? bVol : -1;
       return bCount - aCount;
     });
     return copy;
@@ -284,11 +290,13 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   function recordCompleteness(product) {
+    var V = window.ReviewRankValidation;
     var score = 0;
     if (product.title) score += 1;
     if (product.price != null && product.price > 0) score += 2;
     if (product.rating > 0) score += 1;
-    if (product.reviewCount > 0) score += 3;
+    var vol = (V && typeof V.getFeedbackVolume === 'function') ? V.getFeedbackVolume(product) : null;
+    if (vol != null && vol > 0) score += 3;
     if (product.imageUrl) score += 1;
     return score;
   }
